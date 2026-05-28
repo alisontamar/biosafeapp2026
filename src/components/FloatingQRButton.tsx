@@ -1,27 +1,51 @@
-import React from 'react'
-import { TouchableOpacity, Text, StyleSheet } from 'react-native'
+// src/components/FloatingQRButton.tsx
 
-type Props = { onPress?: () => void }
+import React from 'react';
+import { TouchableOpacity, StyleSheet, View } from 'react-native';
+// Asumiendo que usas Expo o react-native-vector-icons
+import { Ionicons } from '@expo/vector-icons'; 
+import { colors } from '../theme/colors';
 
-export default function FloatingQRButton({ onPress }: Props) {
-  return (
-    <TouchableOpacity style={styles.button} onPress={onPress}>
-      <Text style={styles.text}>QR</Text>
-    </TouchableOpacity>
-  )
+interface FloatingQRButtonProps {
+  onPress: () => void;
 }
 
+export const FloatingQRButton = ({ onPress }: FloatingQRButtonProps) => {
+  return (
+    <View style={styles.container} pointerEvents="box-none">
+      <TouchableOpacity 
+        style={styles.button} 
+        onPress={onPress} 
+        activeOpacity={0.8}
+      >
+        <Ionicons name="qr-code-outline" size={32} color={colors.background} />
+      </TouchableOpacity>
+    </View>
+  );
+};
+
 const styles = StyleSheet.create({
-  button: {
+  container: {
     position: 'absolute',
-    right: 20,
-    bottom: 40,
-    backgroundColor: '#0a84ff',
-    width: 60,
-    height: 60,
-    borderRadius: 30,
     alignItems: 'center',
-    justifyContent: 'center',
+    // Ajusta este valor dependiendo de la altura de tu TabBar
+    bottom: 30, 
+    alignSelf: 'center',
+    zIndex: 10,
   },
-  text: { color: '#fff', fontWeight: '700' },
-})
+  button: {
+    backgroundColor: colors.primary,
+    width: 64,
+    height: 64,
+    borderRadius: 32, // Perfectamente redondo
+    justifyContent: 'center',
+    alignItems: 'center',
+    // Sombra para iOS
+    shadowColor: colors.secondary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    // Sombra para Android
+    elevation: 6, 
+  },
+});

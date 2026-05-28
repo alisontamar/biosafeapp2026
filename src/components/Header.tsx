@@ -1,17 +1,36 @@
-import React from 'react'
-import { View, Text, StyleSheet } from 'react-native'
+// src/components/Header.tsx
 
-type Props = { title?: string }
+import React from 'react';
+import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../theme/colors';
 
-export default function Header({ title }: Props) {
-  return (
-    <View style={styles.header}>
-      <Text style={styles.title}>{title || 'Biosafe'}</Text>
-    </View>
-  )
+interface HeaderProps {
+  userName: string;
 }
 
+export const Header = ({ userName }: HeaderProps) => {
+  return (
+    <View style={styles.container}>
+      <View style={styles.textContainer}>
+        <Text style={styles.greeting}>Hola,</Text>
+        <Text style={styles.name}>{userName}</Text>
+      </View>
+      <TouchableOpacity style={styles.profileButton}>
+        {/* Placeholder para la foto de perfil */}
+        <View style={styles.avatarFallback}>
+          <Ionicons name="person" size={24} color={colors.background} />
+        </View>
+      </TouchableOpacity>
+    </View>
+  );
+};
+
 const styles = StyleSheet.create({
-  header: { padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
-  title: { fontSize: 18, fontWeight: '700' },
-})
+  container: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingTop: 20, paddingBottom: 10, backgroundColor: colors.background },
+  textContainer: { flex: 1 },
+  greeting: { fontSize: 16, color: colors.tertiary },
+  name: { fontSize: 24, fontWeight: 'bold', color: colors.secondary },
+  profileButton: { shadowColor: colors.secondary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
+  avatarFallback: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.tertiary, justifyContent: 'center', alignItems: 'center' },
+});
