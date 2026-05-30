@@ -1,13 +1,13 @@
 // src/screens/auth/LoginScreen.tsx
-
 import React, { useState } from 'react';
 import { 
   View, Text, TextInput, TouchableOpacity, StyleSheet, 
-  KeyboardAvoidingView, Platform, SafeAreaView 
+  KeyboardAvoidingView, Platform, SafeAreaView, Alert, ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { colors } from '../../theme/colors';
+import { supabase } from '../../lib/supabase';
 
 type Role = 'parent' | 'health_center';
 
@@ -16,12 +16,62 @@ export const LoginScreen = () => {
   const [role, setRole] = useState<Role>('parent');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  
+  // Estado para manejar la animación de carga
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = () => {
-    // Aquí irá tu lógica de autenticación (ej: supabase.auth.signInWithPassword)
-    console.log(`Iniciando sesión como ${role} con email: ${email}`);
-    // Simular acceso al Dashboard
-    router.replace('/home');
+  const handleLogin = async () => {
+    if (!email || !password) {
+      Alert.alert('Campos vacíos', 'Por favor ingresa tu correo y contraseña.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // 1. Autenticación oficial con Supabase
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password,
+      });
+
+      if (authError) throw authError;
+
+      if (authData.user) {
+        // 2. Traer el rol del usuario desde tu tabla pública
+        const { data: userData, error: userError } = await supabase
+          .from('usuarios')
+          .select('rol')
+          .eq('id_usuario', authData.user.id)
+          .single();
+
+        if (userError) throw userError;
+
+        // 3. Validar Seguridad: ¿El tipo de cuenta seleccionado coincide con la BD?
+        const isParentInDB = userData.rol === 'Tutor_PersonaNormal';
+        const isParentSelected = role === 'parent';
+
+        if (isParentInDB !== isParentSelected) {
+          // Si un padre intenta entrar como clínica (o viceversa), lo bloqueamos y deslogueamos
+          await supabase.auth.signOut();
+          Alert.alert(
+            'Acceso denegado', 
+            isParentSelected 
+              ? 'Esta cuenta pertenece a un profesional de salud. Cambia el tipo de cuenta arriba.' 
+              : 'Esta cuenta pertenece a un padre/tutor. Cambia el tipo de cuenta arriba.'
+          );
+          return;
+        }
+
+        // 4. Éxito: Redirigimos al Dashboard correspondiente
+        // Aquí podrías enviar a diferentes rutas según el rol si lo necesitas
+        router.replace('/home');
+      }
+    } catch (error: any) {
+      console.error('Error Login:', error);
+      Alert.alert('Credenciales incorrectas', 'El correo o la contraseña no son válidos.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -40,6 +90,7 @@ export const LoginScreen = () => {
           <TouchableOpacity 
             style={[styles.roleButton, role === 'parent' && styles.roleButtonActive]}
             onPress={() => setRole('parent')}
+            disabled={loading}
           >
             <Ionicons 
               name="people" 
@@ -54,6 +105,7 @@ export const LoginScreen = () => {
           <TouchableOpacity 
             style={[styles.roleButton, role === 'health_center' && styles.roleButtonActive]}
             onPress={() => setRole('health_center')}
+            disabled={loading}
           >
             <Ionicons 
               name="medical" 
@@ -78,6 +130,7 @@ export const LoginScreen = () => {
               autoCapitalize="none"
               value={email}
               onChangeText={setEmail}
+              editable={!loading}
             />
           </View>
 
@@ -90,14 +143,27 @@ export const LoginScreen = () => {
               secureTextEntry
               value={password}
               onChangeText={setPassword}
+              editable={!loading}
             />
           </View>
 
-          <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
-            <Text style={styles.loginButtonText}>Iniciar Sesión</Text>
+          <TouchableOpacity 
+            style={[styles.loginButton, loading && { opacity: 0.7 }]} 
+            onPress={handleLogin}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color={colors.background} />
+            ) : (
+              <Text style={styles.loginButtonText}>Iniciar Sesión</Text>
+            )}
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.linkButton}>
+          <TouchableOpacity 
+            style={styles.linkButton} 
+            disabled={loading}
+            onPress={() => router.push('/register')}
+          >
             <Text style={styles.linkText}>¿No tienes cuenta? <Text style={styles.linkTextBold}>Regístrate</Text></Text>
           </TouchableOpacity>
         </View>
