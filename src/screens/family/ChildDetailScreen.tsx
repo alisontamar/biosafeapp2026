@@ -6,6 +6,7 @@ import { colors } from '../../theme/colors';
 import { Card } from '../../components/Card';
 import { supabase } from '../../lib/supabase';
 import { QRModal } from '../../components/QRModal';
+import { CarnetUploadModal } from '../../components/CarnetUploadModal';
 
 type VaccineRecord = {
   id_registro: string;
@@ -25,6 +26,7 @@ export const ChildDetailScreen = () => {
   const [vaccines, setVaccines] = useState<VaccineRecord[]>([]);
   const [activeTab, setActiveTab] = useState<'applied' | 'pending'>('pending');
   const [showQR, setShowQR] = useState(false);
+  const [showCarnet, setShowCarnet] = useState(false);
 
   useEffect(() => {
     cargarDatos();
@@ -191,9 +193,9 @@ export const ChildDetailScreen = () => {
       )}
 
       <View style={styles.actionFooter}>
-        <TouchableOpacity style={styles.actionButtonSecondary} onPress={() => Alert.alert('Centros Cercanos', 'Funcionalidad próxima.')}>
-          <Ionicons name="location-outline" size={20} color={colors.primary} />
-          <Text style={styles.actionButtonTextSecondary}>Centros Cercanos</Text>
+        <TouchableOpacity style={styles.actionButtonSecondary} onPress={() => setShowCarnet(true)}>
+          <Ionicons name="camera-outline" size={20} color={colors.primary} />
+          <Text style={styles.actionButtonTextSecondary}>Carnet Físico</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionButtonPrimary} onPress={() => setShowQR(true)}>
           <Ionicons name="qr-code-outline" size={20} color={colors.background} />
@@ -202,6 +204,15 @@ export const ChildDetailScreen = () => {
       </View>
 
       <QRModal visible={showQR} onClose={() => setShowQR(false)} paciente={child} />
+
+      {child && (
+        <CarnetUploadModal
+          visible={showCarnet}
+          onClose={() => setShowCarnet(false)}
+          idPaciente={child.id_paciente}
+          nombrePaciente={child.nombre_completo}
+        />
+      )}
     </SafeAreaView>
   );
 };
