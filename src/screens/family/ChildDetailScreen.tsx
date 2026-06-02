@@ -1,43 +1,145 @@
-// src/screens/family/ChildDetailScreen.tsx
-
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, FlatList } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, FlatList, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { colors } from '../../theme/colors';
 import { Card } from '../../components/Card';
+import { supabase } from '../../lib/supabase';
+import { QRModal } from '../../components/QRModal';
 
-const vaccinesData = [
-  { id: '1', name: 'BCG (Tuberculosis)', date: '10 Ene 2024', status: 'applied' },
-  { id: '2', name: 'Pentavalente', date: '15 Mar 2024', status: 'applied' },
-  { id: '3', name: 'Sarampión, Rubéola (SRP)', date: 'Pendiente', status: 'pending', dueIn: '12 días' },
-];
+type VaccineRecord = {
+  id_registro: string;
+  fecha_aplicacion: string;
+  fecha_vencimiento_proxima: string | null;
+  lote: string | null;
+  nombre_vacuna: string;
+  dosis_numero: string;
+  status: 'applied' | 'pending';
+};
 
-export const ChildDetailScreen = ({ navigation }: any) => {
+export const ChildDetailScreen = () => {
+  const { id } = useLocalSearchParams();
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [child, setChild] = useState<any>(null);
+  const [vaccines, setVaccines] = useState<VaccineRecord[]>([]);
   const [activeTab, setActiveTab] = useState<'applied' | 'pending'>('pending');
+  const [showQR, setShowQR] = useState(false);
 
-  const filteredVaccines = vaccinesData.filter(v => v.status === activeTab);
+  useEffect(() => {
+    cargarDatos();
+  }, []);
 
-  const renderVaccine = ({ item }: any) => (
+  const cargarDatos = async () => {
+    try {
+      const { data: paciente } = await supabase
+        .from('pacientes')
+        .select('*')
+        .eq('id_paciente', id)
+        .single();
+
+      if (!paciente) { Alert.alert('Error', 'Paciente no encontrado'); router.back(); return; }
+      setChild(paciente);
+
+      const { data: dosis } = await supabase
+        .from('dosis_aplicadas')
+        .select(`
+          id_registro,
+          fecha_aplicacion,
+          fecha_vencimiento_proxima,
+          lote,
+          cat_vacunas_oficiales ( nombre_enfermedad, dosis_numero )
+        `)
+        .eq('id_paciente', id)
+        .order('fecha_aplicacion', { ascending: false });
+
+      const { data: catalogo } = await supabase
+        .from('cat_vacunas_oficiales')
+        .select('*')
+        .order('edad_meses_ideal', { ascending: true });
+
+      const appliedSet = new Set((dosis || []).map((d: any) => d.cat_vacunas_oficiales?.nombre_enfermedad));
+
+      const records: VaccineRecord[] = [];
+
+      (dosis || []).forEach((d: any) => {
+        records.push({
+          id_registro: d.id_registro,
+          fecha_aplicacion: d.fecha_aplicacion,
+          fecha_vencimiento_proxima: d.fecha_vencimiento_proxima,
+          lote: d.lote,
+          nombre_vacuna: d.cat_vacunas_oficiales?.nombre_enfermedad || 'Vacuna',
+          dosis_numero: d.cat_vacunas_oficiales?.dosis_numero || '',
+          status: 'applied',
+        });
+      });
+
+      (catalogo || []).forEach((v: any) => {
+        if (!appliedSet.has(v.nombre_enfermedad)) {
+          records.push({
+            id_registro: v.id_vacuna,
+            fecha_aplicacion: '',
+            fecha_vencimiento_proxima: null,
+            lote: null,
+            nombre_vacuna: v.nombre_enfermedad,
+            dosis_numero: v.dosis_numero,
+            status: 'pending',
+          });
+        }
+      });
+
+      setVaccines(records);
+    } catch (error) {
+      console.error('Error cargando detalle:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const calcularEdad = (fechaNac: string) => {
+    const hoy = new Date();
+    const nac = new Date(fechaNac);
+    const meses = (hoy.getFullYear() - nac.getFullYear()) * 12 + (hoy.getMonth() - nac.getMonth());
+    if (meses < 12) return `${meses} meses`;
+    const años = Math.floor(meses / 12);
+    return `${años} años`;
+  };
+
+  const filteredVaccines = vaccines.filter(v => v.status === activeTab);
+
+  const renderVaccine = ({ item }: { item: VaccineRecord }) => (
     <Card style={styles.vaccineCard}>
       <View style={styles.vaccineInfo}>
-        <Text style={styles.vaccineName}>{item.name}</Text>
+        <Text style={styles.vaccineName}>{item.nombre_vacuna}</Text>
+        <Text style={styles.vaccineDosis}>{item.dosis_numero}</Text>
         <Text style={styles.vaccineDate}>
-          {item.status === 'applied' ? `Aplicada: ${item.date}` : `Vence en: ${item.dueIn}`}
+          {item.status === 'applied'
+            ? `Aplicada: ${new Date(item.fecha_aplicacion).toLocaleDateString()}`
+            : 'Pendiente'}
         </Text>
       </View>
-      <Ionicons 
-        name={item.status === 'applied' ? "checkmark-circle" : "time-outline"} 
-        size={28} 
-        color={item.status === 'applied' ? colors.success : colors.warning} 
+      <Ionicons
+        name={item.status === 'applied' ? "checkmark-circle" : "time-outline"}
+        size={28}
+        color={item.status === 'applied' ? colors.success : colors.warning}
       />
     </Card>
   );
 
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header con botón de volver */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color={colors.secondary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Expediente Médico</Text>
@@ -48,50 +150,65 @@ export const ChildDetailScreen = ({ navigation }: any) => {
         <View style={styles.avatarLarge}>
           <Ionicons name="happy" size={48} color={colors.primary} />
         </View>
-        <Text style={styles.childName}>Mateo Gomez</Text>
-        <Text style={styles.childId}>CI: 12345678</Text>
+        <Text style={styles.childName}>{child?.nombre_completo}</Text>
+        <Text style={styles.childId}>{calcularEdad(child?.fecha_nacimiento)}</Text>
       </View>
 
-      {/* Tabs Custom */}
       <View style={styles.tabContainer}>
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'pending' && styles.activeTab]} 
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'pending' && styles.activeTab]}
           onPress={() => setActiveTab('pending')}
         >
-          <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>Pendientes ⏳</Text>
+          <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>Pendientes</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'applied' && styles.activeTab]} 
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'applied' && styles.activeTab]}
           onPress={() => setActiveTab('applied')}
         >
-          <Text style={[styles.tabText, activeTab === 'applied' && styles.activeTabText]}>Aplicadas ✅</Text>
+          <Text style={[styles.tabText, activeTab === 'applied' && styles.activeTabText]}>Aplicadas</Text>
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={filteredVaccines}
-        renderItem={renderVaccine}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.listContainer}
-      />
+      {filteredVaccines.length === 0 ? (
+        <View style={styles.center}>
+          <Ionicons
+            name={activeTab === 'pending' ? "checkmark-done" : "calendar-outline"}
+            size={48}
+            color={colors.tertiary}
+          />
+          <Text style={styles.emptyText}>
+            {activeTab === 'pending' ? '¡Todo al día! Sin vacunas pendientes.' : 'No hay vacunas aplicadas aún.'}
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredVaccines}
+          renderItem={renderVaccine}
+          keyExtractor={item => item.id_registro}
+          contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
 
-      {/* Botones de Acción Fijos */}
       <View style={styles.actionFooter}>
-        <TouchableOpacity style={styles.actionButtonSecondary}>
+        <TouchableOpacity style={styles.actionButtonSecondary} onPress={() => Alert.alert('Centros Cercanos', 'Funcionalidad próxima.')}>
           <Ionicons name="location-outline" size={20} color={colors.primary} />
           <Text style={styles.actionButtonTextSecondary}>Centros Cercanos</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.actionButtonPrimary}>
-          <Ionicons name="document-text-outline" size={20} color={colors.background} />
-          <Text style={styles.actionButtonTextPrimary}>Descargar PDF</Text>
+        <TouchableOpacity style={styles.actionButtonPrimary} onPress={() => setShowQR(true)}>
+          <Ionicons name="qr-code-outline" size={20} color={colors.background} />
+          <Text style={styles.actionButtonTextPrimary}>Ver QR</Text>
         </TouchableOpacity>
       </View>
+
+      <QRModal visible={showQR} onClose={() => setShowQR(false)} paciente={child} />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 24 },
   backButton: { padding: 8, marginLeft: -8 },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: colors.secondary },
@@ -107,8 +224,10 @@ const styles = StyleSheet.create({
   listContainer: { paddingHorizontal: 24, paddingBottom: 100 },
   vaccineCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   vaccineInfo: { flex: 1 },
-  vaccineName: { fontSize: 16, fontWeight: 'bold', color: colors.secondary, marginBottom: 4 },
+  vaccineName: { fontSize: 16, fontWeight: 'bold', color: colors.secondary, marginBottom: 2 },
+  vaccineDosis: { fontSize: 13, color: colors.tertiary, marginBottom: 2 },
   vaccineDate: { fontSize: 14, color: colors.tertiary },
+  emptyText: { fontSize: 16, color: colors.tertiary, textAlign: 'center', marginTop: 16 },
   actionFooter: { flexDirection: 'row', padding: 24, backgroundColor: colors.background, borderTopWidth: 1, borderTopColor: '#E5E7EB', gap: 12 },
   actionButtonSecondary: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: colors.primary },
   actionButtonTextSecondary: { color: colors.primary, fontWeight: 'bold', marginLeft: 8 },

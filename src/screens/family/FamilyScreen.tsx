@@ -1,23 +1,53 @@
-// src/screens/family/FamilyScreen.tsx
-
-import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, FlatList, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { colors } from '../../theme/colors';
 import { Card } from '../../components/Card';
+import { supabase } from '../../lib/supabase';
 
-// Data simulada
-const familyData = [
-  { id: '1', name: 'Mateo Gomez', age: '2 años', progress: 85 },
-  { id: '2', name: 'Lucía Gomez', age: '6 meses', progress: 40 },
-];
+export const FamilyScreen = () => {
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [hijos, setHijos] = useState<any[]>([]);
 
-export const FamilyScreen = ({ navigation }: any) => {
-  
+  const cargarHijos = useCallback(async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { router.replace('/login'); return; }
+
+      const { data: pacientes } = await supabase
+        .from('pacientes')
+        .select('*')
+        .eq('id_tutor_registro', session.user.id)
+        .order('fecha_registro', { ascending: true });
+
+      setHijos(pacientes || []);
+    } catch (error) {
+      console.error('Error cargando hijos:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    cargarHijos();
+  }, [cargarHijos]);
+
+  const calcularEdad = (fechaNac: string) => {
+    const hoy = new Date();
+    const nac = new Date(fechaNac);
+    const meses = (hoy.getFullYear() - nac.getFullYear()) * 12 + (hoy.getMonth() - nac.getMonth());
+    if (meses < 12) return `${meses} meses`;
+    const años = Math.floor(meses / 12);
+    const restoMeses = meses % 12;
+    return restoMeses > 0 ? `${años} años ${restoMeses} meses` : `${años} años`;
+  };
+
   const renderChildCard = ({ item }: any) => (
-    <TouchableOpacity 
-      activeOpacity={0.8} 
-      onPress={() => navigation.navigate('ChildDetail', { childId: item.id })}
+    <TouchableOpacity
+      activeOpacity={0.8}
+      onPress={() => router.push({ pathname: '/(tabs)/family/[id]', params: { id: item.id_paciente } })}
     >
       <Card style={styles.childCard}>
         <View style={styles.cardHeader}>
@@ -25,21 +55,10 @@ export const FamilyScreen = ({ navigation }: any) => {
             <Ionicons name="happy-outline" size={32} color={colors.primary} />
           </View>
           <View style={styles.infoContainer}>
-            <Text style={styles.childName}>{item.name}</Text>
-            <Text style={styles.childAge}>{item.age}</Text>
+            <Text style={styles.childName}>{item.nombre_completo}</Text>
+            <Text style={styles.childAge}>{calcularEdad(item.fecha_nacimiento)}</Text>
           </View>
           <Ionicons name="chevron-forward" size={24} color={colors.tertiary} />
-        </View>
-
-        {/* Barra de progreso de vacunación */}
-        <View style={styles.progressContainer}>
-          <View style={styles.progressTextRow}>
-            <Text style={styles.progressLabel}>Progreso del esquema</Text>
-            <Text style={styles.progressPercentage}>{item.progress}%</Text>
-          </View>
-          <View style={styles.progressBarBackground}>
-            <View style={[styles.progressBarFill, { width: `${item.progress}%` }]} />
-          </View>
         </View>
       </Card>
     </TouchableOpacity>
@@ -49,40 +68,43 @@ export const FamilyScreen = ({ navigation }: any) => {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Mi Familia</Text>
-        <TouchableOpacity style={styles.addButton}>
-          <Ionicons name="add" size={24} color={colors.background} />
-        </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={familyData}
-        renderItem={renderChildCard}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.listContainer}
-        showsVerticalScrollIndicator={false}
-      />
+      {loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      ) : hijos.length === 0 ? (
+        <View style={styles.center}>
+          <Ionicons name="people-outline" size={64} color={colors.tertiary} />
+          <Text style={styles.emptyTitle}>Aún no tienes familiares</Text>
+          <Text style={styles.emptySubtext}>Añade familiares desde la pantalla de inicio</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={hijos}
+          renderItem={renderChildCard}
+          keyExtractor={item => item.id_paciente}
+          contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingTop: 20, paddingBottom: 10 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+  header: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 10 },
   title: { fontSize: 28, fontWeight: 'bold', color: colors.secondary },
-  addButton: { backgroundColor: colors.primary, width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-  listContainer: { paddingHorizontal: 24, paddingBottom: 100 }, // paddingBottom para el botón flotante
-  
+  listContainer: { paddingHorizontal: 24, paddingBottom: 100 },
   childCard: { marginBottom: 16 },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center' },
   avatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(16, 185, 129, 0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
   infoContainer: { flex: 1 },
   childName: { fontSize: 18, fontWeight: 'bold', color: colors.secondary, marginBottom: 4 },
   childAge: { fontSize: 14, color: colors.tertiary },
-  
-  progressContainer: { marginTop: 8 },
-  progressTextRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  progressLabel: { fontSize: 14, color: colors.tertiary },
-  progressPercentage: { fontSize: 14, fontWeight: 'bold', color: colors.primary },
-  progressBarBackground: { height: 8, backgroundColor: colors.surface, borderRadius: 4, overflow: 'hidden' },
-  progressBarFill: { height: '100%', backgroundColor: colors.primary, borderRadius: 4 },
+  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: colors.secondary, marginTop: 16, textAlign: 'center' },
+  emptySubtext: { fontSize: 14, color: colors.tertiary, marginTop: 8, textAlign: 'center', marginBottom: 24 },
 });
