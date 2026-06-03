@@ -387,7 +387,11 @@ export const HomeScreen = () => {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <Header userName={nombreCorto} />
+      <Header
+        userName={nombreCorto}
+        userFullName={userData?.nombre_completo}
+        userEmail={userData?.correo_electronico}
+      />
 
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
         {isTutor ? renderTutorView() : renderHealthCenterView()}
