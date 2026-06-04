@@ -25,7 +25,7 @@ const slides = [
     title: 'Alertas\nInteligentes',
     description: 'Nuestra IA detecta brotes epidemiológicos y te avisa antes de que representen un riesgo para tu familia.',
     icon: 'pulse' as const,
-    gradientColors: ['#1A1A2E', '#2D3561'] as const,
+    gradientColors: ['#553b5e', '#2D3561'] as const,
   },
   {
     id: '3',

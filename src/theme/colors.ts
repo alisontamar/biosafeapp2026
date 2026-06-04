@@ -3,7 +3,7 @@
 export const colors = {
   // Colores principales
   primary: '#a280b9', // Verde esmeralda (puedes ajustar el hex exacto de tu web)
-  secondary: '#1A1A2E', // Azul oscuro profundo (de la imagen)
+  secondary: '#402b52', // Azul oscuro profundo (de la imagen)
   tertiary: '#7698B3', // Azul grisáceo (de la imagen)
   
   // Fondos y superficies
@@ -11,7 +11,7 @@ export const colors = {
   surface: '#F8F9FA', // Gris súper claro para el fondo de las Cards
   
   // Textos
-  textPrimary: '#1A1A2E', // Usamos el Secondary para alto contraste en lectura
+  textPrimary: '#553b5e', // Usamos el Secondary para alto contraste en lectura
   textSecondary: '#7698B3', // Usamos el Tertiary para subtítulos o hints
   
   // Estados
