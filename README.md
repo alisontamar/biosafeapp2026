@@ -356,6 +356,21 @@ VALUES (
 
 ## Integraciones IA
 
+### Alertas epidemiológicas (pestaña Alertas — tutor)
+
+Pipeline automático que corre **una vez al día** via Supabase Edge Function + `pg_cron`:
+
+1. **Tavily** busca en dominios oficiales (`paho.org`, `who.int`, `minsalud.gob.bo`, `cdc.gov`) limitando resultados a los últimos 30 días.
+2. **Groq** (`llama-3.1-8b-instant`) sintetiza 2–4 alertas en español con nivel `info | warning | critical`.
+3. Las alertas anteriores se desactivan y se insertan las nuevas en `alertas_epidemiologicas_ia`.
+4. Todos los usuarios leen la misma tabla — **2 búsquedas Tavily/día** (~60/mes, dentro del free tier de 1.000/mes).
+
+Archivos: `supabase/functions/generate-alerts/index.ts` · Migración: `supabase/migrations/20260608_alertas_ia.sql`
+
+**Documentación técnica detallada:** [`supabase/functions/generate-alerts/README.md`](supabase/functions/generate-alerts/README.md)
+
+---
+
 ### Recomendaciones de salud (Home — tutor)
 
 Al abrir la app, el módulo de recomendaciones sigue este flujo:
@@ -388,5 +403,5 @@ Iconos disponibles para las tarjetas: `sunny`, `rainy`, `cold`, `hot`, `wind`, `
 | Administración — Creación de usuarios con carnet | Completo |
 | Scanner QR desde panel admin | Completo |
 | Recomendaciones de salud con IA (Home) | Completo |
-| Alertas epidemiológicas por IA | Estructura lista (datos de IA pendientes) |
+| Alertas epidemiológicas por IA (Tavily + Groq) | Completo — requiere deploy Edge Function |
 | Educación (artículos/videos) | Estructura lista (contenido pendiente) |

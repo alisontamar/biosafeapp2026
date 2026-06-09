@@ -1,79 +1,118 @@
-// src/screens/alerts/AlertsScreen.tsx
-
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, FlatList, TouchableOpacity } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, SafeAreaView, FlatList,
+  TouchableOpacity, ActivityIndicator, Linking,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../../theme/colors';
-import { Card } from '../../components/Card';
+import { useFocusEffect } from 'expo-router';
+import { supabase } from '../../lib/supabase';
 
-const initialAlerts = [
-  { 
-    id: '1', 
-    type: 'ai', 
-    title: 'Análisis Predictivo', 
-    message: 'Nuestros modelos indican un posible aumento de gripe estacional en Cochabamba para las próximas semanas. Recomendamos revisar el estado de la vacuna de influenza.', 
-    date: 'Hace 2 horas' 
-  },
-  { 
-    id: '2', 
-    type: 'reminder', 
-    title: 'Recordatorio Médico', 
-    message: 'La vacuna Pentavalente de Lucía está programada para la próxima semana.', 
-    date: 'Ayer' 
-  },
-];
+type Alerta = {
+  id: string;
+  titulo: string;
+  resumen: string;
+  nivel: 'info' | 'warning' | 'critical';
+  fuente_url: string | null;
+  fecha_generacion: string;
+};
+
+const NIVEL_CONFIG = {
+  info: { color: '#a281ba', bg: 'rgba(162,129,186,0.08)', icon: 'information-circle-outline' as const, label: 'Informativo' },
+  warning: { color: '#F59E0B', bg: 'rgba(245,158,11,0.08)', icon: 'warning-outline' as const, label: 'Precaución' },
+  critical: { color: '#EF4444', bg: 'rgba(239,68,68,0.08)', icon: 'alert-circle-outline' as const, label: 'Urgente' },
+};
 
 export const AlertsScreen = () => {
-  const [alerts, setAlerts] = useState(initialAlerts);
+  const [alertas, setAlertas] = useState<Alerta[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const markAsRead = (id: string) => {
-    setAlerts(alerts.filter(alert => alert.id !== id));
+  const cargar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('alertas_epidemiologicas_ia')
+        .select('id, titulo, resumen, nivel, fuente_url, fecha_generacion')
+        .eq('activa', true)
+        .order('fecha_generacion', { ascending: false });
+
+      if (!error && data) setAlertas(data as Alerta[]);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
+
+  const formatFecha = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString('es-BO', { day: '2-digit', month: 'short', year: 'numeric' });
   };
 
-  const renderAlert = ({ item }: any) => {
-    const isAI = item.type === 'ai';
+  const renderAlerta = ({ item }: { item: Alerta }) => {
+    const cfg = NIVEL_CONFIG[item.nivel] ?? NIVEL_CONFIG.info;
     return (
-      <Card style={[styles.alertCard, isAI && styles.aiAlertCard]}>
-        <View style={styles.alertHeader}>
-          <View style={styles.titleRow}>
-            <Ionicons 
-              name={isAI ? "pulse" : "calendar-outline"} 
-              size={20} 
-              color={isAI ? colors.primary : colors.tertiary} 
-            />
-            <Text style={[styles.alertTitle, isAI && styles.aiTitle]}>{item.title}</Text>
+      <View style={[styles.card, { backgroundColor: cfg.bg, borderLeftColor: cfg.color }]}>
+        <View style={styles.cardHeader}>
+          <View style={styles.nivelBadge}>
+            <Ionicons name={cfg.icon} size={14} color={cfg.color} />
+            <Text style={[styles.nivelLabel, { color: cfg.color }]}>{cfg.label}</Text>
           </View>
-          <Text style={styles.alertDate}>{item.date}</Text>
+          <Text style={styles.fecha}>{formatFecha(item.fecha_generacion)}</Text>
         </View>
-        
-        <Text style={styles.alertMessage}>{item.message}</Text>
-        
-        <TouchableOpacity style={styles.readButton} onPress={() => markAsRead(item.id)}>
-          <Ionicons name="checkmark-done" size={16} color={colors.tertiary} />
-          <Text style={styles.readButtonText}>Marcar como leída</Text>
-        </TouchableOpacity>
-      </Card>
+
+        <Text style={styles.titulo}>{item.titulo}</Text>
+        <Text style={styles.resumen}>{item.resumen}</Text>
+
+        {item.fuente_url ? (
+          <TouchableOpacity
+            style={styles.fuenteRow}
+            onPress={() => item.fuente_url && Linking.openURL(item.fuente_url)}
+          >
+            <Ionicons name="open-outline" size={13} color="#8e8e99" />
+            <Text style={styles.fuenteText} numberOfLines={1}>
+              Ver fuente oficial
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
     );
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
         <Text style={styles.title}>Alertas</Text>
-        <Text style={styles.subtitle}>Impulsadas por IA</Text>
+        <Text style={styles.subtitle}>Epidemiológicas · Actualización diaria con IA</Text>
       </View>
 
-      {alerts.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="notifications-off-outline" size={64} color={colors.tertiary} />
-          <Text style={styles.emptyText}>Estás al día con todas tus alertas.</Text>
+      {loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#a281ba" />
+          <Text style={styles.loadingText}>Cargando alertas...</Text>
+        </View>
+      ) : alertas.length === 0 ? (
+        <View style={styles.center}>
+          <Ionicons name="shield-checkmark-outline" size={60} color="#D1D5DB" />
+          <Text style={styles.emptyTitle}>Sin alertas activas</Text>
+          <Text style={styles.emptyDesc}>No hay alertas epidemiológicas vigentes en este momento.</Text>
         </View>
       ) : (
         <FlatList
-          data={alerts}
-          renderItem={renderAlert}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.listContainer}
+          data={alertas}
+          keyExtractor={(item) => item.id}
+          renderItem={renderAlerta}
+          contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+          showsVerticalScrollIndicator={false}
+          ListHeaderComponent={
+            <View style={styles.iaNote}>
+              <Ionicons name="globe-outline" size={14} color="#a281ba" />
+              <Text style={styles.iaNoteText}>
+                Generadas por IA a partir de fuentes oficiales (OPS, OMS, Ministerio de Salud Bolivia)
+              </Text>
+            </View>
+          }
         />
       )}
     </SafeAreaView>
@@ -81,21 +120,36 @@ export const AlertsScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.surface },
-  header: { padding: 24, paddingBottom: 16 },
-  title: { fontSize: 28, fontWeight: 'bold', color: colors.secondary },
-  subtitle: { fontSize: 16, color: colors.primary, fontWeight: '600', marginTop: 4 },
-  listContainer: { paddingHorizontal: 24, paddingBottom: 100 },
-  alertCard: { marginBottom: 16, padding: 20 },
-  aiAlertCard: { borderColor: colors.primary, borderWidth: 1, backgroundColor: 'rgba(16, 185, 129, 0.03)' },
-  alertHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  titleRow: { flexDirection: 'row', alignItems: 'center' },
-  alertTitle: { fontSize: 16, fontWeight: 'bold', color: colors.secondary, marginLeft: 8 },
-  aiTitle: { color: colors.primary },
-  alertDate: { fontSize: 12, color: colors.tertiary },
-  alertMessage: { fontSize: 14, color: colors.tertiary, lineHeight: 22, marginBottom: 16 },
-  readButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', padding: 8 },
-  readButtonText: { fontSize: 14, color: colors.tertiary, marginLeft: 4, fontWeight: '500' },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
-  emptyText: { fontSize: 16, color: colors.tertiary, textAlign: 'center', marginTop: 16 },
+  safe: { flex: 1, backgroundColor: '#F8F9FA' },
+  header: {
+    backgroundColor: '#553b5e',
+    paddingHorizontal: 20, paddingTop: 20, paddingBottom: 18,
+  },
+  title: { color: 'white', fontSize: 24, fontWeight: 'bold' },
+  subtitle: { color: 'rgba(255,255,255,0.65)', fontSize: 12, marginTop: 3 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32, gap: 10 },
+  loadingText: { color: '#8e8e99', fontSize: 14 },
+  emptyTitle: { fontSize: 16, fontWeight: '600', color: '#553b5e', textAlign: 'center' },
+  emptyDesc: { fontSize: 13, color: '#8e8e99', textAlign: 'center' },
+  iaNote: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(162,129,186,0.08)', borderRadius: 10,
+    padding: 10, marginBottom: 14,
+  },
+  iaNoteText: { flex: 1, fontSize: 11, color: '#553b5e', lineHeight: 16 },
+  card: {
+    borderRadius: 14, padding: 16, marginBottom: 12,
+    borderLeftWidth: 4,
+    backgroundColor: 'white',
+    shadowColor: '#000', shadowOpacity: 0.04, shadowOffset: { width: 0, height: 2 }, shadowRadius: 6,
+    elevation: 2,
+  },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  nivelBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  nivelLabel: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  fecha: { fontSize: 11, color: '#8e8e99' },
+  titulo: { fontSize: 15, fontWeight: '700', color: '#553b5e', marginBottom: 6 },
+  resumen: { fontSize: 13, color: '#444', lineHeight: 20, marginBottom: 10 },
+  fuenteRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  fuenteText: { fontSize: 12, color: '#8e8e99', textDecorationLine: 'underline', flex: 1 },
 });
