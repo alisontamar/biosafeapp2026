@@ -32,6 +32,12 @@
         {
           "cameraPermission": "BioSafe necesita la cámara para escanear códigos QR de pacientes."
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "BioSafe usa tu ubicación para darte recomendaciones de salud según el clima de tu ciudad."
+        }
       ]
     ],
     "experiments": {

@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, FlatList,
   TouchableOpacity, ActivityIndicator, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 
 export const PatientsListScreen = () => {
@@ -46,7 +46,7 @@ export const PatientsListScreen = () => {
     }
   }, []);
 
-  useEffect(() => { cargar(); }, [cargar]);
+  useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
   const calcularEdad = (fechaNac: string) => {
     const meses =
@@ -106,7 +106,7 @@ export const PatientsListScreen = () => {
             <TouchableOpacity
               style={styles.card}
               onPress={() =>
-                router.push({ pathname: '/(healthTabs)/patient-detail', params: { id_paciente: item.id_paciente } })
+                router.push({ pathname: '/(healthTabs)/patient-detail', params: { id_paciente: item.id_paciente, grupo: 'health' } })
               }
             >
               <View style={styles.avatar}>

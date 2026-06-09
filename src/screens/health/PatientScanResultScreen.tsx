@@ -6,13 +6,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter, useSegments } from 'expo-router';
 import { supabase } from '../../lib/supabase';
-import { colors } from '../../theme/colors';
 
 export const PatientScanResultScreen = () => {
-  const { id_paciente } = useLocalSearchParams<{ id_paciente: string }>();
+  const { id_paciente, grupo } = useLocalSearchParams<{ id_paciente: string; grupo?: string }>();
   const router = useRouter();
   const segments = useSegments();
-  const tabGroup = segments[0] === '(adminTabs)' ? '(adminTabs)' : '(healthTabs)';
+  const tabGroup = grupo === 'admin' ? 'adminTabs' :
+                   grupo === 'health' ? 'healthTabs' :
+                   segments[0] === '(adminTabs)' ? 'adminTabs' : 'healthTabs';
   const [loading, setLoading] = useState(true);
   const [paciente, setPaciente] = useState<any>(null);
   const [dosis, setDosis] = useState<any[]>([]);
@@ -32,10 +33,10 @@ export const PatientScanResultScreen = () => {
           .from('dosis_aplicadas')
           .select(`
             id_registro, fecha_aplicacion, lote, origen_registro,
-            cat_vacunas_oficiales ( id_vacuna, nombre_enfermedad, dosis_numero )
+            cat_vacunas_oficiales ( id_vacuna, nombre_enfermedad, dosis_numero, edad_meses_ideal )
           `)
           .eq('id_paciente', id_paciente)
-          .order('fecha_aplicacion', { ascending: false }),
+          .order('fecha_aplicacion', { ascending: true }),
         supabase
           .from('cat_vacunas_oficiales')
           .select('*')
@@ -54,15 +55,22 @@ export const PatientScanResultScreen = () => {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  const calcularEdad = (fechaNac: string) => {
-    const hoy = new Date();
+  const edadEnMeses = (fechaNac: string, referencia?: string) => {
+    const ref = referencia ? new Date(referencia) : new Date();
     const nac = new Date(fechaNac);
-    const meses = (hoy.getFullYear() - nac.getFullYear()) * 12 + (hoy.getMonth() - nac.getMonth());
-    if (meses < 12) return `${meses} meses`;
-    const anios = Math.floor(meses / 12);
-    const mesesRest = meses % 12;
-    return mesesRest > 0 ? `${anios} años y ${mesesRest} meses` : `${anios} años`;
+    return (ref.getFullYear() - nac.getFullYear()) * 12 + (ref.getMonth() - nac.getMonth());
   };
+
+  const formatMeses = (meses: number) => {
+    if (meses === 0) return 'Al nacer';
+    if (meses < 12) return `${meses} mes${meses !== 1 ? 'es' : ''}`;
+    const anios = Math.floor(meses / 12);
+    const rest = meses % 12;
+    if (rest === 0) return `${anios} año${anios !== 1 ? 's' : ''}`;
+    return `${anios} año${anios !== 1 ? 's' : ''} y ${rest} mes${rest !== 1 ? 'es' : ''}`;
+  };
+
+  const calcularEdad = (fechaNac: string) => formatMeses(edadEnMeses(fechaNac));
 
   const vacunasAplicadasIds = new Set(dosis.map((d) => d.cat_vacunas_oficiales?.id_vacuna));
   const pendientes = catalogo.filter((v) => !vacunasAplicadasIds.has(v.id_vacuna));
@@ -88,6 +96,8 @@ export const PatientScanResultScreen = () => {
       </SafeAreaView>
     );
   }
+
+  const edadActualMeses = edadEnMeses(paciente.fecha_nacimiento);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -124,6 +134,12 @@ export const PatientScanResultScreen = () => {
               <Ionicons name="checkmark-shield" size={12} color="white" />
               <Text style={styles.badgeText}>{dosis.length} dosis</Text>
             </View>
+            {pendientes.length > 0 && (
+              <View style={[styles.badge, { backgroundColor: '#F59E0B' }]}>
+                <Ionicons name="alert-circle" size={12} color="white" />
+                <Text style={styles.badgeText}>{pendientes.length} pend.</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -131,62 +147,91 @@ export const PatientScanResultScreen = () => {
         <TouchableOpacity
           style={styles.registerBtn}
           onPress={() =>
-            router.push({ pathname: `/(${tabGroup})/register-dose` as any, params: { id_paciente: paciente.id_paciente } })
+            router.push({ pathname: `/(${tabGroup})/register-dose` as any, params: { id_paciente: paciente.id_paciente, grupo } })
           }
         >
           <Ionicons name="add-circle" size={20} color="white" />
-          <Text style={styles.registerBtnText}>Registrar nueva dosis</Text>
+          <Text style={styles.registerBtnText}>Agregar nueva dosis</Text>
         </TouchableOpacity>
 
         {/* Vacunas pendientes */}
         {pendientes.length > 0 && (
           <>
-            <Text style={styles.sectionLabel}>Pendientes del esquema PAI</Text>
-            {pendientes.map((v) => (
-              <View key={v.id_vacuna} style={[styles.vacunaRow, styles.pendienteRow]}>
-                <View style={[styles.vacunaIcon, { backgroundColor: '#FEF3C7' }]}>
-                  <Ionicons name="time-outline" size={16} color="#F59E0B" />
+            <Text style={styles.sectionLabel}>
+              Pendientes del esquema PAI ({pendientes.length})
+            </Text>
+            {pendientes.map((v) => {
+              const vencida = edadActualMeses > v.edad_meses_ideal;
+              const faltanMeses = v.edad_meses_ideal - edadActualMeses;
+              return (
+                <View key={v.id_vacuna} style={[styles.vacunaRow, vencida ? styles.vencidaRow : styles.pendienteRow]}>
+                  <View style={[styles.vacunaIcon, { backgroundColor: vencida ? '#FEE2E2' : '#FEF3C7' }]}>
+                    <Ionicons
+                      name={vencida ? 'warning-outline' : 'time-outline'}
+                      size={16}
+                      color={vencida ? '#EF4444' : '#F59E0B'}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.vacunaNombre}>{v.nombre_enfermedad}</Text>
+                    <Text style={styles.vacunaDosis}>{v.dosis_numero}</Text>
+                    <Text style={[styles.edadTag, vencida ? styles.edadTagVencida : styles.edadTagPendiente]}>
+                      {vencida
+                        ? `Atrasada · debía aplicarse a los ${formatMeses(v.edad_meses_ideal)}`
+                        : faltanMeses === 0
+                          ? `Recomendada este mes (${formatMeses(v.edad_meses_ideal)})`
+                          : `A los ${formatMeses(v.edad_meses_ideal)} · faltan ${faltanMeses} mes${faltanMeses !== 1 ? 'es' : ''}`}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={vencida ? 'alert-circle' : 'alert-circle-outline'}
+                    size={18}
+                    color={vencida ? '#EF4444' : '#F59E0B'}
+                  />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.vacunaNombre}>{v.nombre_enfermedad}</Text>
-                  <Text style={styles.vacunaDosis}>{v.dosis_numero} · A los {v.edad_meses_ideal} meses</Text>
-                </View>
-                <Ionicons name="alert-circle-outline" size={18} color="#F59E0B" />
-              </View>
-            ))}
+              );
+            })}
           </>
         )}
 
         {/* Vacunas aplicadas */}
-        <Text style={styles.sectionLabel}>Historial de vacunación</Text>
+        <Text style={styles.sectionLabel}>
+          Historial de vacunación ({dosis.length})
+        </Text>
         {dosis.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="medical-outline" size={40} color="#D1D5DB" />
             <Text style={styles.emptyText}>Sin dosis registradas</Text>
           </View>
         ) : (
-          dosis.map((d) => (
-            <View key={d.id_registro} style={styles.vacunaRow}>
-              <View style={[styles.vacunaIcon, { backgroundColor: 'rgba(162,129,186,0.1)' }]}>
-                <Ionicons name="shield-checkmark" size={16} color="#a281ba" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.vacunaNombre}>
-                  {d.cat_vacunas_oficiales?.nombre_enfermedad ?? 'Vacuna'}
+          dosis.map((d) => {
+            const edadAlAplicar = edadEnMeses(paciente.fecha_nacimiento, d.fecha_aplicacion);
+            return (
+              <View key={d.id_registro} style={styles.vacunaRow}>
+                <View style={[styles.vacunaIcon, { backgroundColor: 'rgba(162,129,186,0.1)' }]}>
+                  <Ionicons name="shield-checkmark" size={16} color="#a281ba" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.vacunaNombre}>
+                    {d.cat_vacunas_oficiales?.nombre_enfermedad ?? 'Vacuna'}
+                  </Text>
+                  <Text style={styles.vacunaDosis}>
+                    {d.cat_vacunas_oficiales?.dosis_numero}
+                    {d.lote ? ` · Lote: ${d.lote}` : ''}
+                  </Text>
+                  <Text style={styles.edadAplicacion}>
+                    A los {formatMeses(edadAlAplicar)} de edad
+                    {d.origen_registro === 'Migrado_Cartilla_Fisica' ? ' · Cartilla física' : ''}
+                  </Text>
+                </View>
+                <Text style={styles.vacunaFecha}>
+                  {new Date(d.fecha_aplicacion).toLocaleDateString('es-BO', {
+                    day: '2-digit', month: 'short', year: 'numeric',
+                  })}
                 </Text>
-                <Text style={styles.vacunaDosis}>
-                  {d.cat_vacunas_oficiales?.dosis_numero}
-                  {d.lote ? ` · Lote: ${d.lote}` : ''}
-                  {d.origen_registro === 'Migrado_Cartilla_Fisica' ? ' · Cartilla física' : ''}
-                </Text>
               </View>
-              <Text style={styles.vacunaFecha}>
-                {new Date(d.fecha_aplicacion).toLocaleDateString('es-BO', {
-                  day: '2-digit', month: 'short', year: 'numeric',
-                })}
-              </Text>
-            </View>
-          ))
+            );
+          })
         )}
 
         <View style={{ height: 40 }} />
@@ -258,10 +303,15 @@ const styles = StyleSheet.create({
     borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#E5E7EB',
   },
   pendienteRow: { borderColor: '#FDE68A', backgroundColor: '#FFFBEB' },
+  vencidaRow: { borderColor: '#FECACA', backgroundColor: '#FEF2F2' },
   vacunaIcon: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
   vacunaNombre: { fontSize: 14, fontWeight: '700', color: '#553b5e' },
   vacunaDosis: { fontSize: 12, color: '#8e8e99', marginTop: 2 },
-  vacunaFecha: { fontSize: 11, color: '#8e8e99' },
+  edadTag: { fontSize: 11, marginTop: 4, fontWeight: '600' },
+  edadTagPendiente: { color: '#D97706' },
+  edadTagVencida: { color: '#DC2626' },
+  edadAplicacion: { fontSize: 11, color: '#6B7280', marginTop: 3 },
+  vacunaFecha: { fontSize: 11, color: '#8e8e99', textAlign: 'right', minWidth: 60 },
   emptyState: { alignItems: 'center', paddingVertical: 32 },
   emptyText: { fontSize: 14, color: '#8e8e99', marginTop: 10 },
 });

@@ -109,7 +109,9 @@ export const HealthDashboardScreen = () => {
         {/* ── Vacunación rápida ── */}
         <View style={styles.quickSection}>
           <Text style={styles.quickTitle}>Vacunación rápida</Text>
-          <Text style={styles.quickSubtitle}>Selecciona la vacuna que vas a aplicar hoy y escanea el QR del paciente</Text>
+          <Text style={styles.quickSubtitle}>
+            Selecciona una vacuna para registrarla al escanear, o escanea directamente para ver el historial del paciente
+          </Text>
 
           {/* Selector de vacuna */}
           <TouchableOpacity style={styles.vacunaPicker} onPress={() => setShowCatalogo(true)}>
@@ -147,18 +149,18 @@ export const HealthDashboardScreen = () => {
                 })
               }
             >
-              <Ionicons name="qr-code-outline" size={20} color="white" />
+              <Ionicons name="qr-code-outline" size={18} color="white" />
               <Text style={styles.quickScanBtnText}>
-                {vacunaSeleccionada ? `Escanear y aplicar` : 'Escanear paciente'}
+                {vacunaSeleccionada ? 'Escanear y registrar' : 'Selecciona vacuna primero'}
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.scanOnlyBtn}
-              onPress={() => router.push('/(healthTabs)/scanner')}
+              onPress={() => router.push({ pathname: '/(healthTabs)/scanner', params: { grupo: 'health' } })}
             >
-              <Ionicons name="scan-outline" size={18} color={PRIMARY} />
-              <Text style={styles.scanOnlyBtnText}>Ver expediente</Text>
+              <Ionicons name="scan-outline" size={16} color={PRIMARY} />
+              <Text style={styles.scanOnlyBtnText}>Ver historial</Text>
             </TouchableOpacity>
           </View>
         </View>

@@ -4,14 +4,14 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useSegments } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { QRPayload } from '../../types';
 
 export const QRScannerScreen = () => {
   const router = useRouter();
-  const segments = useSegments();
-  const tabGroup = segments[0] === '(adminTabs)' ? '(adminTabs)' : '(healthTabs)';
+  const { grupo } = useLocalSearchParams<{ grupo?: string }>();
+  const tabGroup = grupo === 'admin' ? 'adminTabs' : 'healthTabs';
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -62,7 +62,7 @@ export const QRScannerScreen = () => {
 
       router.push({
         pathname: `/(${tabGroup})/patient-detail` as any,
-        params: { id_paciente: paciente.id_paciente },
+        params: { id_paciente: paciente.id_paciente, grupo },
       });
     } catch (e) {
       console.error(e);

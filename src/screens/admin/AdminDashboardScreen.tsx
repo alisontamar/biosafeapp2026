@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, SafeAreaView,
-  TouchableOpacity, ActivityIndicator,
+  TouchableOpacity, ActivityIndicator, Modal, FlatList,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -18,6 +18,9 @@ export const AdminDashboardScreen = () => {
   const [userData, setUserData] = useState<any>(null);
   const [stats, setStats] = useState({ establecimientos: 0, usuarios: 0, pacientes: 0, dosis: 0 });
   const [establecimiento, setEstablecimiento] = useState<any>(null);
+  const [catalogo, setCatalogo] = useState<any[]>([]);
+  const [vacunaSeleccionada, setVacunaSeleccionada] = useState<any>(null);
+  const [showCatalogo, setShowCatalogo] = useState(false);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -55,11 +58,13 @@ export const AdminDashboardScreen = () => {
             .eq('id_establecimiento', estId)
             .single();
           setEstablecimiento(est);
-          const [resPersonal, resDosis] = await Promise.all([
+          const [resPersonal, resDosis, resCat] = await Promise.all([
             supabase.from('usuarios').select('id_usuario', { count: 'exact', head: true }).eq('id_establecimiento', estId),
             supabase.from('dosis_aplicadas').select('id_registro', { count: 'exact', head: true }),
+            supabase.from('cat_vacunas_oficiales').select('*').order('edad_meses_ideal', { ascending: true }),
           ]);
           setStats({ establecimientos: 1, usuarios: resPersonal.count ?? 0, pacientes: 0, dosis: resDosis.count ?? 0 });
+          setCatalogo(resCat.data ?? []);
         }
       }
     } catch (e) {
@@ -100,16 +105,63 @@ export const AdminDashboardScreen = () => {
         {/* Scanner QR — visible para AdminEstablecimiento */}
         {!isSuperAdmin && (
           <View style={styles.scanWrap}>
-            <TouchableOpacity
-              style={styles.scanBtn}
-              onPress={() => router.push('/(adminTabs)/scanner')}
-            >
-              <View style={styles.scanIconBg}>
-                <Ionicons name="qr-code-outline" size={38} color="white" />
-              </View>
+            <View style={styles.scanCard}>
               <Text style={styles.scanTitle}>Escanear Carnet QR</Text>
-              <Text style={styles.scanDesc}>Identificar paciente y registrar vacuna</Text>
-            </TouchableOpacity>
+              <Text style={styles.scanDesc}>
+                Selecciona una vacuna para registrarla al escanear, o escanea directamente para ver el historial
+              </Text>
+
+              {/* Selector de vacuna */}
+              <TouchableOpacity style={styles.vacunaPicker} onPress={() => setShowCatalogo(true)}>
+                <View style={styles.vacunaPickerLeft}>
+                  <View style={[styles.vacunaPickerIcon, vacunaSeleccionada && { backgroundColor: PRIMARY }]}>
+                    <Ionicons name="medical" size={18} color={vacunaSeleccionada ? 'white' : '#8e8e99'} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    {vacunaSeleccionada ? (
+                      <>
+                        <Text style={styles.vacunaPickerSelected}>{vacunaSeleccionada.nombre_enfermedad}</Text>
+                        <Text style={styles.vacunaPickerDosis}>{vacunaSeleccionada.dosis_numero}</Text>
+                      </>
+                    ) : (
+                      <Text style={styles.vacunaPickerPlaceholder}>Seleccionar vacuna (opcional)</Text>
+                    )}
+                  </View>
+                </View>
+                <Ionicons name="chevron-down" size={18} color="#8e8e99" />
+              </TouchableOpacity>
+
+              {/* Botones de acción */}
+              <View style={styles.quickBtnsRow}>
+                <TouchableOpacity
+                  style={[styles.quickScanBtn, !vacunaSeleccionada && styles.quickScanBtnDisabled]}
+                  disabled={!vacunaSeleccionada}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(adminTabs)/quick-scan',
+                      params: {
+                        id_vacuna: vacunaSeleccionada.id_vacuna,
+                        nombre_vacuna: vacunaSeleccionada.nombre_enfermedad,
+                        dosis_numero: vacunaSeleccionada.dosis_numero,
+                      },
+                    })
+                  }
+                >
+                  <Ionicons name="qr-code-outline" size={18} color="white" />
+                  <Text style={styles.quickScanBtnText}>
+                    {vacunaSeleccionada ? 'Escanear y registrar' : 'Selecciona vacuna primero'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.scanOnlyBtn}
+                  onPress={() => router.push({ pathname: '/(adminTabs)/scanner', params: { grupo: 'admin' } })}
+                >
+                  <Ionicons name="scan-outline" size={16} color={PRIMARY} />
+                  <Text style={styles.scanOnlyBtnText}>Ver historial</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         )}
 
@@ -191,6 +243,42 @@ export const AdminDashboardScreen = () => {
 
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* Modal catálogo de vacunas */}
+      <Modal visible={showCatalogo} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Catálogo PAI Bolivia</Text>
+              <TouchableOpacity onPress={() => setShowCatalogo(false)}>
+                <Ionicons name="close" size={24} color="#553b5e" />
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={catalogo}
+              keyExtractor={(item) => item.id_vacuna}
+              showsVerticalScrollIndicator={false}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[
+                    styles.catalogoItem,
+                    vacunaSeleccionada?.id_vacuna === item.id_vacuna && styles.catalogoItemActive,
+                  ]}
+                  onPress={() => { setVacunaSeleccionada(item); setShowCatalogo(false); }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.catalogoNombre}>{item.nombre_enfermedad}</Text>
+                    <Text style={styles.catalogoDosis}>{item.dosis_numero} · {item.edad_meses_ideal} meses</Text>
+                  </View>
+                  {vacunaSeleccionada?.id_vacuna === item.id_vacuna && (
+                    <Ionicons name="checkmark-circle" size={20} color={PRIMARY} />
+                  )}
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -206,15 +294,39 @@ const styles = StyleSheet.create({
   headerName: { color: 'white', fontSize: 26, fontWeight: 'bold', marginTop: 2 },
   headerEst: { color: 'rgba(255,255,255,0.75)', fontSize: 13, marginTop: 4 },
   scanWrap: { padding: 16, paddingBottom: 0 },
-  scanBtn: {
-    backgroundColor: '#2d1f3d', borderRadius: 20, padding: 24, alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(162,129,186,0.3)',
+  scanCard: {
+    backgroundColor: 'white', borderRadius: 20, padding: 18,
+    borderWidth: 1, borderColor: '#E5E7EB',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
   },
-  scanIconBg: {
-    backgroundColor: 'rgba(162,129,186,0.25)', padding: 18, borderRadius: 24, marginBottom: 12,
+  scanTitle: { fontSize: 16, fontWeight: 'bold', color: '#553b5e', marginBottom: 4 },
+  scanDesc: { fontSize: 12, color: '#8e8e99', lineHeight: 16, marginBottom: 16 },
+  vacunaPicker: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#F8F9FA', borderRadius: 14,
+    borderWidth: 1, borderColor: '#E5E7EB',
+    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 14,
   },
-  scanTitle: { color: 'white', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
-  scanDesc: { color: 'rgba(255,255,255,0.65)', fontSize: 13 },
+  vacunaPickerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  vacunaPickerIcon: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center',
+  },
+  vacunaPickerPlaceholder: { color: '#8e8e99', fontSize: 13 },
+  vacunaPickerSelected: { color: '#553b5e', fontSize: 14, fontWeight: '700' },
+  vacunaPickerDosis: { color: '#8e8e99', fontSize: 11, marginTop: 1 },
+  quickBtnsRow: { flexDirection: 'row', gap: 10 },
+  quickScanBtn: {
+    flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: PRIMARY, borderRadius: 14, paddingVertical: 13,
+  },
+  quickScanBtnDisabled: { backgroundColor: '#D1D5DB' },
+  quickScanBtnText: { color: 'white', fontWeight: 'bold', fontSize: 13 },
+  scanOnlyBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    borderWidth: 1.5, borderColor: PRIMARY, borderRadius: 14, paddingVertical: 13,
+  },
+  scanOnlyBtnText: { color: PRIMARY, fontWeight: '700', fontSize: 13 },
   sectionLabel: {
     fontSize: 12, fontWeight: '700', color: '#8e8e99',
     letterSpacing: 0.8, textTransform: 'uppercase',
@@ -236,4 +348,19 @@ const styles = StyleSheet.create({
   },
   statNum: { fontSize: 28, fontWeight: 'bold', color: '#553b5e' },
   statLabel: { fontSize: 12, color: '#8e8e99', textAlign: 'center' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  modalContent: {
+    backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 20, maxHeight: '80%',
+  },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#553b5e' },
+  catalogoItem: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 14, paddingHorizontal: 4,
+    borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
+  },
+  catalogoItemActive: { backgroundColor: 'rgba(162,129,186,0.06)' },
+  catalogoNombre: { fontSize: 14, fontWeight: '700', color: '#553b5e' },
+  catalogoDosis: { fontSize: 12, color: '#8e8e99', marginTop: 2 },
 });

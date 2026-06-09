@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, SafeAreaView,
-  TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert,
+  TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert, AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Header } from '../../components/Header';
 import { Card } from '../../components/Card';
@@ -12,6 +13,39 @@ import { colors } from '../../theme/colors';
 import { supabase } from '../../lib/supabase';
 import { QRModal } from '../../components/QRModal';
 import { CarnetUploadModal } from '../../components/CarnetUploadModal';
+
+// ─── Mapas de clima y IA ─────────────────────────────────────────
+const WMO: Record<string, string> = {
+  '0': 'cielo despejado', '1': 'principalmente despejado', '2': 'parcialmente nublado',
+  '3': 'nublado', '45': 'niebla', '48': 'niebla con escarcha',
+  '51': 'llovizna ligera', '53': 'llovizna moderada', '55': 'llovizna densa',
+  '61': 'lluvia ligera', '63': 'lluvia moderada', '65': 'lluvia fuerte',
+  '71': 'nevada ligera', '73': 'nevada moderada', '75': 'nevada fuerte',
+  '80': 'chubascos ligeros', '81': 'chubascos moderados', '82': 'chubascos fuertes',
+  '95': 'tormenta eléctrica', '96': 'tormenta con granizo', '99': 'tormenta fuerte',
+};
+
+const ICONO_MAP: Record<string, { icon: string; color: string; bg: string }> = {
+  sunny:    { icon: 'sunny-outline',           color: '#F59E0B', bg: '#FEF3C7' },
+  rainy:    { icon: 'rainy-outline',            color: '#3B82F6', bg: '#DBEAFE' },
+  cold:     { icon: 'snow-outline',             color: '#6366F1', bg: '#EEF2FF' },
+  hot:      { icon: 'thermometer-outline',      color: '#EF4444', bg: '#FEE2E2' },
+  wind:     { icon: 'flag-outline',             color: '#8B5CF6', bg: '#EDE9FE' },
+  baby:     { icon: 'heart-outline',            color: '#EC4899', bg: '#FCE7F3' },
+  child:    { icon: 'people-outline',           color: '#10B981', bg: '#D1FAE5' },
+  pregnant: { icon: 'heart',                    color: '#EC4899', bg: '#FCE7F3' },
+  shield:   { icon: 'shield-checkmark-outline', color: '#10B981', bg: '#D1FAE5' },
+  medical:  { icon: 'medical-outline',          color: '#a281ba', bg: 'rgba(162,129,186,0.1)' },
+};
+
+const FALLBACK_RECS = [
+  { icono: 'shield', titulo: 'Vacunas al día', descripcion: 'Verifica que las vacunas de tu familia estén al corriente.' },
+  { icono: 'medical', titulo: 'Buena hidratación', descripcion: 'Bebe al menos 8 vasos de agua al día.' },
+  { icono: 'child', titulo: 'Cuida a los niños', descripcion: 'Asegúrate de que los más pequeños estén abrigados y protegidos.' },
+];
+
+type Rec = { icono: string; titulo: string; descripcion: string };
+type ClimaInfo = { temp: number; sensacion: number; desc: string; ciudad: string };
 
 export const HomeScreen = () => {
   const router = useRouter();
@@ -37,8 +71,29 @@ export const HomeScreen = () => {
   // Carnet upload modal
   const [carnetPaciente, setCarnetPaciente] = useState<any>(null);
 
+  // Recomendaciones IA
+  const [recs, setRecs] = useState<Rec[]>([]);
+  const [recsLoading, setRecsLoading] = useState(false);
+  const [climaInfo, setClimaInfo] = useState<ClimaInfo | null>(null);
+  const [showLocationModal, setShowLocationModal] = useState(false);
+  const pacientesRef = useRef<any[]>([]);
+  const profileRef = useRef<any>(null);
+  const appState = useRef(AppState.currentState);
+
+  // Carga inicial al montar
+  useEffect(() => { cargarDatosHome(); }, []);
+
+  // Recomendaciones solo se refrescan cuando la app vuelve del background
   useEffect(() => {
-    cargarDatosHome();
+    const sub = AppState.addEventListener('change', (next) => {
+      if (appState.current.match(/inactive|background/) && next === 'active') {
+        if (profileRef.current) {
+          cargarRecomendaciones(profileRef.current, pacientesRef.current);
+        }
+      }
+      appState.current = next;
+    });
+    return () => sub.remove();
   }, []);
 
   const cargarDatosHome = async () => {
@@ -87,6 +142,19 @@ export const HomeScreen = () => {
 
           if (dosis) setProximaVacuna(dosis);
         }
+
+        // Guardar en refs para el listener de AppState
+        profileRef.current = profile;
+        pacientesRef.current = todos;
+
+        // Verificar permiso de ubicación: mostrar modal si nunca se pidió
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (status === 'undetermined') {
+          setShowLocationModal(true);
+        } else {
+          // Ya hay decisión tomada → cargar recomendaciones directamente
+          cargarRecomendaciones(profile, todos);
+        }
       }
     } catch (error) {
       console.error('Error al cargar Home:', error);
@@ -107,6 +175,111 @@ export const HomeScreen = () => {
       (hoy.getFullYear() - nac.getFullYear()) * 12 + (hoy.getMonth() - nac.getMonth());
     if (meses < 12) return `${meses} meses`;
     return `${Math.floor(meses / 12)} años`;
+  };
+
+  const edadMeses = (fechaNac: string) => {
+    const hoy = new Date();
+    const nac = new Date(fechaNac);
+    return (hoy.getFullYear() - nac.getFullYear()) * 12 + (hoy.getMonth() - nac.getMonth());
+  };
+
+  const cargarRecomendaciones = async (profile: any, pacientes: any[]) => {
+    setRecsLoading(true);
+    try {
+      // 1. Geolocalización: GPS si hay permiso, sino por IP, sino La Paz
+      let lat = -16.5, lon = -68.15, ciudad = 'Bolivia';
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          lat = pos.coords.latitude;
+          lon = pos.coords.longitude;
+          // Geocodificación inversa para obtener el nombre de la ciudad
+          const [place] = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
+          ciudad = place?.city ?? place?.region ?? 'Bolivia';
+        } else {
+          // Fallback: geolocalización por IP
+          const geo = await fetch('https://ip-api.com/json/?fields=lat,lon,city').then(r => r.json());
+          if (geo?.lat) { lat = geo.lat; lon = geo.lon; ciudad = geo.city || ciudad; }
+        }
+      } catch { /* usa La Paz */ }
+
+      // 2. Clima actual de OpenMeteo
+      const wRes = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+        `&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m&timezone=auto`
+      );
+      const wd = await wRes.json();
+      const curr = wd.current;
+      const desc = WMO[String(curr.weathercode)] ?? 'condición variable';
+
+      setClimaInfo({
+        temp: Math.round(curr.temperature_2m),
+        sensacion: Math.round(curr.apparent_temperature),
+        desc,
+        ciudad,
+      });
+
+      // 3. Contexto familiar
+      const bebes    = pacientes.filter(p => edadMeses(p.fecha_nacimiento) < 12);
+      const ninos    = pacientes.filter(p => { const m = edadMeses(p.fecha_nacimiento); return m >= 12 && m < 144; });
+      const embzs    = pacientes.filter(p => p.es_embarazada);
+      const esEmb    = profile.es_embarazada || embzs.length > 0;
+
+      const familiaCtx: string[] = [];
+      if (bebes.length)  familiaCtx.push(`${bebes.length} bebé(s) menor(es) de 1 año`);
+      if (ninos.length)  familiaCtx.push(`${ninos.length} niño(s) de 1–12 años`);
+      if (esEmb)         familiaCtx.push('hay una persona embarazada en la familia');
+      const ctxStr = familiaCtx.length
+        ? `Familia a cargo: ${familiaCtx.join(', ')}.`
+        : 'Sin hijos registrados.';
+
+      // 4. Prompt para Groq
+      const prompt =
+        `Eres asesor de salud preventiva para Bolivia. Clima hoy en ${ciudad}: ` +
+        `${curr.temperature_2m}°C (sensación ${curr.apparent_temperature}°C), ${desc}, ` +
+        `viento ${curr.windspeed_10m} km/h. ${ctxStr} ` +
+        `Genera 3 recomendaciones de salud para hoy, breves y específicas al clima y contexto. ` +
+        `Responde SOLO con JSON válido (sin markdown): ` +
+        `{"items":[{"icono":"ICON","titulo":"MAX 4 PALABRAS","descripcion":"MAX 15 PALABRAS"},` +
+        `{"icono":"ICON","titulo":"...","descripcion":"..."},{"icono":"ICON","titulo":"...","descripcion":"..."}]} ` +
+        `Iconos válidos: sunny rainy cold hot wind baby child pregnant shield medical`;
+
+      const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.EXPO_PUBLIC_GROQ_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'llama-3.1-8b-instant',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.6,
+          max_tokens: 350,
+          response_format: { type: 'json_object' },
+        }),
+      });
+
+      const groqData = await groqRes.json();
+      const content: string = groqData.choices?.[0]?.message?.content ?? '';
+      const parsed = JSON.parse(content);
+      const items: Rec[] = parsed.items ?? parsed.recomendaciones ?? parsed;
+      setRecs(Array.isArray(items) ? items.slice(0, 3) : FALLBACK_RECS);
+    } catch (e) {
+      console.log('Recs IA error:', e);
+      setRecs(FALLBACK_RECS);
+    } finally {
+      setRecsLoading(false);
+    }
+  };
+
+  const handleLocationPermission = async (allow: boolean) => {
+    setShowLocationModal(false);
+    if (allow) {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      // Recargar recomendaciones con la nueva ubicación (GPS si se concedió)
+      cargarRecomendaciones(profileRef.current, pacientesRef.current);
+    }
   };
 
   const handleAddChild = async () => {
@@ -310,26 +483,45 @@ export const HomeScreen = () => {
         ))
       )}
 
-      {/* ── Tips ── */}
-      <Text style={[styles.sectionLabel, { marginTop: 8 }]}>Recomendaciones</Text>
-      <Card style={styles.tipCard}>
-        <View style={[styles.tipIcon, { backgroundColor: 'rgba(162,128,185,0.1)' }]}>
-          <Ionicons name="water-outline" size={22} color={colors.primary} />
+      {/* ── Recomendaciones IA ── */}
+      <View style={styles.recsHeader}>
+        <Text style={[styles.sectionLabel, { marginTop: 8, marginBottom: 0 }]}>Recomendaciones del día</Text>
+        {climaInfo && (
+          <View style={styles.climaBadge}>
+            <Ionicons name="thermometer-outline" size={13} color="#6366F1" />
+            <Text style={styles.climaBadgeText}>{climaInfo.temp}°C · {climaInfo.ciudad}</Text>
+          </View>
+        )}
+      </View>
+
+      {climaInfo && (
+        <View style={styles.climaCard}>
+          <Ionicons name="partly-sunny-outline" size={20} color="#F59E0B" />
+          <Text style={styles.climaDesc}>{climaInfo.desc}, {climaInfo.sensacion}°C de sensación</Text>
         </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.tipTitle}>Hidratación post-vacuna</Text>
-          <Text style={styles.tipDesc}>Fiebre leve es normal. Mantén buena hidratación.</Text>
+      )}
+
+      {recsLoading ? (
+        <View style={styles.recsLoading}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={styles.recsLoadingText}>Generando recomendaciones...</Text>
         </View>
-      </Card>
-      <Card style={styles.tipCard}>
-        <View style={[styles.tipIcon, { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
-          <Ionicons name="shield-checkmark-outline" size={22} color="#10b981" />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.tipTitle}>Protección familiar</Text>
-          <Text style={styles.tipDesc}>La vacunación protege a tus hijos y a toda tu comunidad.</Text>
-        </View>
-      </Card>
+      ) : (
+        (recs.length > 0 ? recs : FALLBACK_RECS).map((rec, i) => {
+          const ic = ICONO_MAP[rec.icono] ?? ICONO_MAP.medical;
+          return (
+            <Card key={i} style={styles.tipCard}>
+              <View style={[styles.tipIcon, { backgroundColor: ic.bg }]}>
+                <Ionicons name={ic.icon as any} size={22} color={ic.color} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.tipTitle}>{rec.titulo}</Text>
+                <Text style={styles.tipDesc}>{rec.descripcion}</Text>
+              </View>
+            </Card>
+          );
+        })
+      )}
     </>
   );
 
@@ -490,6 +682,38 @@ export const HomeScreen = () => {
           nombrePaciente={carnetPaciente.nombre_completo}
         />
       )}
+
+      {/* Modal permiso de ubicación */}
+      <Modal visible={showLocationModal} transparent animationType="fade">
+        <View style={styles.locOverlay}>
+          <View style={styles.locModal}>
+            <View style={styles.locIconWrap}>
+              <Ionicons name="location" size={36} color="#6366F1" />
+            </View>
+            <Text style={styles.locTitle}>¿Podemos usar tu ubicación?</Text>
+            <Text style={styles.locDesc}>
+              BioSafe usa tu ciudad para darte recomendaciones de salud personalizadas
+              según el clima del día: temperatura, lluvia, frío, etc.
+            </Text>
+            <Text style={styles.locNote}>
+              Solo se usa mientras la app está abierta. No almacenamos tu ubicación.
+            </Text>
+            <TouchableOpacity
+              style={styles.locBtnPrimary}
+              onPress={() => handleLocationPermission(true)}
+            >
+              <Ionicons name="location-outline" size={18} color="white" />
+              <Text style={styles.locBtnPrimaryText}>Permitir ubicación</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.locBtnSecondary}
+              onPress={() => handleLocationPermission(false)}
+            >
+              <Text style={styles.locBtnSecondaryText}>Ahora no</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -717,4 +941,51 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   saveBtnText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+
+  // Recomendaciones IA
+  recsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 10 },
+  climaBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#EEF2FF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20,
+  },
+  climaBadgeText: { fontSize: 11, color: '#6366F1', fontWeight: '700' },
+  climaCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#FFFBEB', borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 10, marginBottom: 10,
+    borderWidth: 1, borderColor: '#FDE68A',
+  },
+  climaDesc: { fontSize: 13, color: '#92400E', flex: 1 },
+  recsLoading: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 20, justifyContent: 'center' },
+  recsLoadingText: { fontSize: 13, color: colors.tertiary },
+
+  // Modal ubicación
+  locOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center', paddingHorizontal: 28,
+  },
+  locModal: {
+    backgroundColor: 'white', borderRadius: 24,
+    padding: 28, alignItems: 'center', width: '100%',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
+  },
+  locIconWrap: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: '#EEF2FF',
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 16,
+  },
+  locTitle: { fontSize: 20, fontWeight: 'bold', color: '#553b5e', textAlign: 'center', marginBottom: 10 },
+  locDesc: { fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 20, marginBottom: 8 },
+  locNote: { fontSize: 12, color: '#9CA3AF', textAlign: 'center', marginBottom: 24, fontStyle: 'italic' },
+  locBtnPrimary: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#6366F1', borderRadius: 16,
+    paddingVertical: 15, paddingHorizontal: 28,
+    width: '100%', justifyContent: 'center', marginBottom: 10,
+  },
+  locBtnPrimaryText: { color: 'white', fontWeight: 'bold', fontSize: 15 },
+  locBtnSecondary: { paddingVertical: 10 },
+  locBtnSecondaryText: { color: '#9CA3AF', fontSize: 14, fontWeight: '600' },
 });

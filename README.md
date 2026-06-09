@@ -18,6 +18,9 @@ Aplicación móvil desarrollada en React Native (Expo) para gestionar el esquema
 | Archivos / Cámara | expo-image-picker, expo-document-picker |
 | Gradientes | expo-linear-gradient |
 | Iconos | @expo/vector-icons (Ionicons) |
+| Ubicación | expo-location (GPS + geocodificación inversa) |
+| Clima | OpenMeteo API (gratis, sin API key) |
+| IA / LLM | Groq API — modelo `llama-3.1-8b-instant` |
 
 ---
 
@@ -68,7 +71,7 @@ Accesible para `Tutor_PersonaNormal`.
 - Lista de hijos registrados con acceso rápido a QR y carnet físico
 - Modal para añadir un hijo: nombre, fecha de nacimiento, sexo → genera QR automáticamente
 - Al añadir hijo, opción de subir carnet físico antiguo
-- Recomendaciones de salud post-vacuna
+- **Recomendaciones de salud con IA** (ver sección [Integraciones IA](#integraciones-ia))
 
 #### Familia (`family`)
 - Lista completa de pacientes vinculados al tutor
@@ -103,15 +106,17 @@ Accesible para `Medico`, `Enfermero`, `Farmaceutico`.
 
 #### Inicio (`dashboard`)
 - Header con nombre, rol y botón de logout
-- **Vacunación rápida**: selector de vacuna del catálogo PAI + botón "Escanear y aplicar"
-- Botón secundario "Ver expediente" para escaneo sin pre-selección
+- **Vacunación rápida** — dos modos de escaneo:
+  - **Modo 1 — Escanear y registrar**: selecciona vacuna del catálogo PAI → escanea QR → registra dosis automáticamente
+  - **Modo 2 — Ver historial**: escanea QR sin pre-seleccionar vacuna → abre expediente con historial completo y botón "Agregar dosis"
 - Stats del día: dosis aplicadas, pacientes atendidos, total del mes
 - Historial de últimas 4 atenciones del día
 
 #### Escanear QR — flujo completo (`scanner`)
-- Cámara real con visor de escaneo (esquinas animadas en `#a281ba`)
+- Cámara real con visor de escaneo (esquinas en `#a281ba`)
 - Verifica QR contra Supabase (valida `id_paciente` + `token`)
 - Navega automáticamente al expediente del paciente
+- Recibe parámetro `grupo` para navegación correcta entre módulos
 
 #### Vacunación rápida (`quick-scan`)
 - Se accede desde el dashboard con una vacuna pre-seleccionada
@@ -123,10 +128,12 @@ Accesible para `Medico`, `Enfermero`, `Farmaceutico`.
 
 #### Expediente del paciente (`patient-detail`)
 - Tarjeta con nombre, edad, sexo, tutor vinculado
-- Badge de embarazo (si aplica)
-- **Vacunas pendientes** del esquema PAI (fondo amarillo)
-- **Historial de dosis aplicadas** (con lote, fecha y origen del registro)
-- Botón para registrar nueva dosis
+- Badges: embarazo, dosis aplicadas, vacunas pendientes
+- **Vacunas pendientes** del esquema PAI con estado de urgencia:
+  - Fondo amarillo: pendiente (muestra cuántos meses faltan para la edad recomendada)
+  - Fondo rojo: **atrasada** (el paciente ya superó la edad ideal y no se aplicó)
+- **Historial de dosis aplicadas** con fecha, lote, origen y **edad del paciente al momento de vacunarse**
+- Botón "Agregar nueva dosis"
 
 #### Registrar dosis (`register-dose`)
 - Picker con catálogo completo de vacunas PAI Bolivia
@@ -138,6 +145,8 @@ Accesible para `Medico`, `Enfermero`, `Farmaceutico`.
 
 #### Mis pacientes (`pacientes`)
 - Lista de todos los pacientes atendidos por este trabajador (deduplicados)
+- Se actualiza automáticamente al volver a la pestaña (`useFocusEffect`)
+- Incluye hijos de tutores atendidos, no solo adultos
 - Búsqueda por nombre
 - Tap en paciente → abre expediente
 
@@ -159,7 +168,9 @@ Accesible para `SuperAdmin` y `AdminEstablecimiento`.
 
 **AdminEstablecimiento:**
 - Nombre e info del establecimiento asignado
-- **Botón "Escanear Carnet QR"** (mismo flujo que Centro de Salud)
+- **Vacunación rápida** — dos modos de escaneo (igual que Centro de Salud):
+  - **Modo 1 — Escanear y registrar**: selecciona vacuna del catálogo PAI → escanea QR → registra dosis automáticamente
+  - **Modo 2 — Ver historial**: escanea sin pre-seleccionar → abre expediente completo del paciente
 - Stats del establecimiento: personal asignado, dosis aplicadas
 - Acciones rápidas: Nuevo Usuario, Ver Usuarios
 
@@ -274,7 +285,10 @@ Crea un archivo `.env` en la raíz del proyecto:
 ```env
 EXPO_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
 EXPO_PUBLIC_SUPABASE_KEY=tu_anon_key
+EXPO_PUBLIC_GROQ_API_KEY=tu_groq_api_key
 ```
+
+> **Nota:** El prefijo `EXPO_PUBLIC_` es obligatorio para que Expo incluya la variable en el bundle del cliente.
 
 ### 2. Instalar dependencias
 
@@ -340,6 +354,23 @@ VALUES (
 
 ---
 
+## Integraciones IA
+
+### Recomendaciones de salud (Home — tutor)
+
+Al abrir la app, el módulo de recomendaciones sigue este flujo:
+
+1. **Permiso de ubicación** — Se muestra una modal personalizada explicando el uso antes de solicitar el permiso del sistema operativo.
+2. **Obtener ubicación** — GPS si el permiso fue otorgado; fallback a geolocalización por IP (`ip-api.com`); fallback final a La Paz (lat `-16.5`, lon `-68.15`).
+3. **Clima actual** — Consulta a OpenMeteo API (gratuita, sin API key). Obtiene temperatura, sensación térmica, código WMO del clima y velocidad del viento.
+4. **Contexto familiar** — Detecta si el tutor tiene bebés (<12 meses), niños (12–144 meses) o si el titular está embarazado.
+5. **Generación con Groq** — Envía clima + contexto familiar al modelo `llama-3.1-8b-instant` y recibe 4 tarjetas `{ icono, titulo, descripcion }` en JSON. Si el LLM falla, se usan tarjetas de fallback estáticas.
+6. **Cadencia de refresco** — Solo cuando la app vuelve del fondo (`AppState: background → active`), no en cada cambio de pestaña.
+
+Iconos disponibles para las tarjetas: `sunny`, `rainy`, `cold`, `hot`, `wind`, `baby`, `child`, `pregnant`, `shield`, `medical`.
+
+---
+
 ## Estado del proyecto (junio 2026)
 
 | Módulo | Estado |
@@ -356,5 +387,6 @@ VALUES (
 | Administración — Gestión de establecimientos | Completo |
 | Administración — Creación de usuarios con carnet | Completo |
 | Scanner QR desde panel admin | Completo |
+| Recomendaciones de salud con IA (Home) | Completo |
 | Alertas epidemiológicas por IA | Estructura lista (datos de IA pendientes) |
 | Educación (artículos/videos) | Estructura lista (contenido pendiente) |
