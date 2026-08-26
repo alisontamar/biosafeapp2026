@@ -9,6 +9,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { colors } from '../../theme/colors';
 import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
+import { usuariosService } from '../../services/usuarios.service';
 
 export const RegisterScreen = () => {
   const router = useRouter();
@@ -64,38 +66,19 @@ export const RegisterScreen = () => {
       if (authError) throw authError;
 
       if (authData.user) {
-        // 2. Crear perfil en la tabla 'usuarios'
-        const { error: insertUserError } = await supabase.from('usuarios').insert([
-          {
-            id_usuario: authData.user.id,
-            nombre_completo: fullName.trim(),
-            correo_electronico: email.trim(), // Nombre exacto según tu DB
-            password_hash: password, // En un MVP esto es pasable, en prod usa solo el Auth
-            rol: 'Tutor_PersonaNormal',
-            tiene_hijos: true, // Asumimos que sí porque se registra como Tutor
-          }
-        ]);
+        // 2. Crear perfil en la tabla 'usuarios' vía usuarios-service
+        await usuariosService.registrarTutor({
+          nombre_completo: fullName.trim(),
+          correo_electronico: email.trim(),
+        });
 
-        if (insertUserError) throw insertUserError;
-
-        // 3. Generar Token Seguro (Compatible con Expo/React Native)
-        const tokenUnico = typeof crypto !== 'undefined' && crypto.randomUUID 
-          ? crypto.randomUUID() 
-          : `biosafe-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-        // 4. Crear su expediente clínico en la tabla 'pacientes'
-        const { error: insertPacError } = await supabase.from('pacientes').insert([
-          {
-            id_tutor_registro: authData.user.id, // Él mismo es su tutor
-            nombre_completo: fullName.trim(),
-            fecha_nacimiento: birthDate.trim(),
-            sexo: gender,
-            es_embarazada: gender === 'F' ? isPregnant : false,
-            codigo_qr_token: tokenUnico
-          }
-        ]);
-
-        if (insertPacError) throw insertPacError;
+        // 3. Crear su expediente clínico (paciente) vía pacientes-vacunacion-service
+        await pacientesVacunacionService.registrarPaciente({
+          nombre_completo: fullName.trim(),
+          fecha_nacimiento: birthDate.trim(),
+          sexo: gender,
+          es_embarazada: gender === 'F' ? isPregnant : false,
+        });
 
         Alert.alert(
           '¡Bienvenido a BioSafe!', 

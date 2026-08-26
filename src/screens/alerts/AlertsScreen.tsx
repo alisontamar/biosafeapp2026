@@ -5,16 +5,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
-import { supabase } from '../../lib/supabase';
-
-type Alerta = {
-  id: string;
-  titulo: string;
-  resumen: string;
-  nivel: 'info' | 'warning' | 'critical';
-  fuente_url: string | null;
-  fecha_generacion: string;
-};
+import { alertasService, type Alerta } from '../../services/alertas.service';
+import { getDepartamentoUsuario, alertaEsCercana, type Departamento } from '../../lib/geo';
 
 const NIVEL_CONFIG = {
   info: { color: '#a281ba', bg: 'rgba(162,129,186,0.08)', icon: 'information-circle-outline' as const, label: 'Informativo' },
@@ -25,17 +17,29 @@ const NIVEL_CONFIG = {
 export const AlertsScreen = () => {
   const [alertas, setAlertas] = useState<Alerta[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userDep, setUserDep] = useState<Departamento | null>(null);
 
   const cargar = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('alertas_epidemiologicas_ia')
-        .select('id, titulo, resumen, nivel, fuente_url, fecha_generacion')
-        .eq('activa', true)
-        .order('fecha_generacion', { ascending: false });
+      // Ubicación del usuario y alertas en paralelo
+      const [dep, data] = await Promise.all([
+        getDepartamentoUsuario(),
+        alertasService.listarActivas(),
+      ]);
 
-      if (!error && data) setAlertas(data as Alerta[]);
+      setUserDep(dep);
+
+      if (data) {
+        const lista = [...data];
+        // Ordenar: las cercanas al usuario primero, el resto por fecha (ya viene ordenado)
+        lista.sort((a, b) => {
+          const ca = alertaEsCercana(a.departamento, dep) ? 0 : 1;
+          const cb = alertaEsCercana(b.departamento, dep) ? 0 : 1;
+          return ca - cb;
+        });
+        setAlertas(lista);
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -52,8 +56,14 @@ export const AlertsScreen = () => {
 
   const renderAlerta = ({ item }: { item: Alerta }) => {
     const cfg = NIVEL_CONFIG[item.nivel] ?? NIVEL_CONFIG.info;
+    const cercana = alertaEsCercana(item.departamento, userDep);
+    const ubicacion = [item.municipio, item.departamento].filter(Boolean).join(', ');
     return (
-      <View style={[styles.card, { backgroundColor: cfg.bg, borderLeftColor: cfg.color }]}>
+      <View style={[
+        styles.card,
+        { backgroundColor: cfg.bg, borderLeftColor: cfg.color },
+        cercana && styles.cardCercana,
+      ]}>
         <View style={styles.cardHeader}>
           <View style={styles.nivelBadge}>
             <Ionicons name={cfg.icon} size={14} color={cfg.color} />
@@ -62,8 +72,22 @@ export const AlertsScreen = () => {
           <Text style={styles.fecha}>{formatFecha(item.fecha_generacion)}</Text>
         </View>
 
+        {cercana && (
+          <View style={styles.cercaBadge}>
+            <Ionicons name="location" size={12} color="#EF4444" />
+            <Text style={styles.cercaText}>Cerca de ti</Text>
+          </View>
+        )}
+
         <Text style={styles.titulo}>{item.titulo}</Text>
         <Text style={styles.resumen}>{item.resumen}</Text>
+
+        {ubicacion ? (
+          <View style={styles.ubicacionRow}>
+            <Ionicons name="navigate-outline" size={13} color="#8e8e99" />
+            <Text style={styles.ubicacionText}>{ubicacion}</Text>
+          </View>
+        ) : null}
 
         {item.fuente_url ? (
           <TouchableOpacity
@@ -109,7 +133,7 @@ export const AlertsScreen = () => {
             <View style={styles.iaNote}>
               <Ionicons name="globe-outline" size={14} color="#a281ba" />
               <Text style={styles.iaNoteText}>
-                Generadas por IA a partir de fuentes oficiales (OPS, OMS, Ministerio de Salud Bolivia)
+                Generadas por IA a partir de fuentes oficiales y medios verificados de Bolivia (Ministerio de Salud, SEDES, OPS, OMS)
               </Text>
             </View>
           }
@@ -144,6 +168,15 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.04, shadowOffset: { width: 0, height: 2 }, shadowRadius: 6,
     elevation: 2,
   },
+  cardCercana: { borderWidth: 1.5, borderColor: '#EF4444', borderLeftWidth: 4 },
+  cercaBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3, alignSelf: 'flex-start',
+    backgroundColor: 'rgba(239,68,68,0.1)', borderRadius: 8,
+    paddingHorizontal: 8, paddingVertical: 3, marginBottom: 8,
+  },
+  cercaText: { fontSize: 11, fontWeight: '700', color: '#EF4444' },
+  ubicacionRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 10 },
+  ubicacionText: { fontSize: 12, color: '#8e8e99', fontWeight: '600' },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   nivelBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   nivelLabel: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },

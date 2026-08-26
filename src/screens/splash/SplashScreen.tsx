@@ -3,27 +3,22 @@
 import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useRootNavigationState } from 'expo-router';
 import { colors } from '../../theme/colors';
 
 export const SplashScreen = () => {
   const router = useRouter();
+  const rootState = useRootNavigationState();
 
   useEffect(() => {
-    // Aquí irá tu lógica real con Supabase
-    // const { data: { session } } = await supabase.auth.getSession();
-    
-    const checkSession = async () => {
-      // Simulamos 1.5 segundos de carga de recursos/sesión
-      setTimeout(() => {
-        // Si no hay sesión activa, lo mandamos al Onboarding
-        // Si la hubiera, harías: router.replace('/home');
-        router.replace('/onboarding');
-      }, 1500);
-    };
+    if (!rootState?.key) return; // esperar a que el navigator esté listo
 
-    checkSession();
-  }, []);
+    const timer = setTimeout(() => {
+      router.replace('/onboarding');
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [rootState?.key]);
 
   return (
     <View style={styles.container}>

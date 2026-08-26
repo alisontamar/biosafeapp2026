@@ -6,6 +6,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
+import { ServiceError } from '../../services/_client';
 
 export const RegisterDoseScreen = () => {
   const { id_paciente } = useLocalSearchParams<{ id_paciente: string }>();
@@ -21,12 +23,12 @@ export const RegisterDoseScreen = () => {
 
   useEffect(() => {
     const init = async () => {
-      const [resPaciente, resCatalogo] = await Promise.all([
-        supabase.from('pacientes').select('nombre_completo').eq('id_paciente', id_paciente).single(),
-        supabase.from('cat_vacunas_oficiales').select('*').order('edad_meses_ideal', { ascending: true }),
+      const [paciente, catalogo] = await Promise.all([
+        pacientesVacunacionService.obtenerPaciente({ id_paciente }),
+        pacientesVacunacionService.listarCatalogoVacunas(),
       ]);
-      if (resPaciente.data) setPaciente(resPaciente.data);
-      if (resCatalogo.data) setCatalogo(resCatalogo.data);
+      setPaciente(paciente);
+      setCatalogo(catalogo);
     };
     init();
   }, [id_paciente]);
@@ -46,29 +48,24 @@ export const RegisterDoseScreen = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.replace('/login'); return; }
 
-      const payload: any = {
+      await pacientesVacunacionService.registrarDosis({
         id_paciente,
         id_vacuna: vacunaSeleccionada.id_vacuna,
-        id_usuario_atendedor: session.user.id,
         fecha_aplicacion: new Date(fecha).toISOString(),
-        origen_registro: 'Validado_En_Establecimiento',
         lote: lote.trim() || null,
         fecha_vencimiento_proxima: proximaCita && /^\d{4}-\d{2}-\d{2}$/.test(proximaCita)
           ? new Date(proximaCita).toISOString()
           : null,
-      };
-
-      const { error } = await supabase.from('dosis_aplicadas').insert([payload]);
-      if (error) throw error;
+      });
 
       Alert.alert('Dosis registrada', `Se registró ${vacunaSeleccionada.nombre_enfermedad} correctamente.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
-    } catch (e: any) {
-      if (e.code === '23505') {
+    } catch (e) {
+      if (e instanceof ServiceError && e.code === 'duplicate_dose') {
         Alert.alert('Ya registrada', 'Esta dosis ya fue registrada para este paciente.');
       } else {
-        Alert.alert('Error', e.message ?? 'No se pudo guardar la dosis.');
+        Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo guardar la dosis.');
       }
     } finally {
       setSaving(false);

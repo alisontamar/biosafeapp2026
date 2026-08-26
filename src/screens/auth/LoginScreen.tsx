@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { colors } from '../../theme/colors';
 import { supabase } from '../../lib/supabase';
+import { usuariosService } from '../../services/usuarios.service';
 import { ROLES_SALUD, RolUsuario } from '../../types';
 
 type LoginMode = 'parent' | 'health' | 'admin';
@@ -50,14 +51,8 @@ export const LoginScreen = () => {
       if (authError) throw authError;
 
       if (authData.user) {
-        const { data: userData, error: userError } = await supabase
-          .from('usuarios')
-          .select('rol')
-          .eq('id_usuario', authData.user.id)
-          .single();
-        if (userError) throw userError;
-
-        const rol = userData.rol as RolUsuario;
+        const perfil = await usuariosService.obtenerPerfil();
+        const rol = perfil.rol as RolUsuario;
         const expectedMode = modeFromRole(rol);
 
         if (expectedMode !== mode) {

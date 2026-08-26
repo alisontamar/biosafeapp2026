@@ -7,6 +7,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
+import { usuariosService } from '../../services/usuarios.service';
+import { dashboardService } from '../../services/dashboard.service';
 import { LABEL_ROL, RolUsuario } from '../../types';
 
 const PRIMARY = '#a281ba';
@@ -28,45 +30,14 @@ export const AdminDashboardScreen = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.replace('/login'); return; }
 
-      const { data: perfil } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('id_usuario', session.user.id)
-        .single();
+      const perfil = await usuariosService.obtenerPerfil();
       if (!perfil) return;
       setUserData(perfil);
 
-      if (perfil.rol === 'SuperAdmin') {
-        const [resEst, resUsers, resPac, resDosis] = await Promise.all([
-          supabase.from('establecimientos').select('id_establecimiento', { count: 'exact', head: true }),
-          supabase.from('usuarios').select('id_usuario', { count: 'exact', head: true }),
-          supabase.from('pacientes').select('id_paciente', { count: 'exact', head: true }),
-          supabase.from('dosis_aplicadas').select('id_registro', { count: 'exact', head: true }),
-        ]);
-        setStats({
-          establecimientos: resEst.count ?? 0,
-          usuarios: resUsers.count ?? 0,
-          pacientes: resPac.count ?? 0,
-          dosis: resDosis.count ?? 0,
-        });
-      } else {
-        const estId = perfil.id_establecimiento;
-        if (estId) {
-          const { data: est } = await supabase
-            .from('establecimientos')
-            .select('*')
-            .eq('id_establecimiento', estId)
-            .single();
-          setEstablecimiento(est);
-          const [resPersonal, resDosis, resCat] = await Promise.all([
-            supabase.from('usuarios').select('id_usuario', { count: 'exact', head: true }).eq('id_establecimiento', estId),
-            supabase.from('dosis_aplicadas').select('id_registro', { count: 'exact', head: true }),
-            supabase.from('cat_vacunas_oficiales').select('*').order('edad_meses_ideal', { ascending: true }),
-          ]);
-          setStats({ establecimientos: 1, usuarios: resPersonal.count ?? 0, pacientes: 0, dosis: resDosis.count ?? 0 });
-          setCatalogo(resCat.data ?? []);
-        }
-      }
+      const resumen = await dashboardService.obtenerResumenAdmin();
+      setStats(resumen.stats);
+      if (resumen.establecimiento) setEstablecimiento(resumen.establecimiento);
+      if (resumen.catalogo.length > 0) setCatalogo(resumen.catalogo);
     } catch (e) {
       console.error(e);
     } finally {
@@ -206,6 +177,17 @@ export const AdminDashboardScreen = () => {
                 <Ionicons name="business" size={22} color="white" />
               </View>
               <Text style={styles.actionText}>Ver{'\n'}Centros</Text>
+            </TouchableOpacity>
+          )}
+          {isSuperAdmin && (
+            <TouchableOpacity
+              style={[styles.actionCard, { backgroundColor: '#FEF3C7' }]}
+              onPress={() => router.push('/(adminTabs)/catalogo-vacunas' as any)}
+            >
+              <View style={[styles.actionIcon, { backgroundColor: '#D97706' }]}>
+                <Ionicons name="medkit" size={22} color="white" />
+              </View>
+              <Text style={styles.actionText}>Catálogo{'\n'}Vacunas</Text>
             </TouchableOpacity>
           )}
         </View>

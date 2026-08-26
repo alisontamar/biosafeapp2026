@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
 
 export const PatientsListScreen = () => {
   const router = useRouter();
@@ -16,29 +16,8 @@ export const PatientsListScreen = () => {
   const cargar = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-
-      const { data } = await supabase
-        .from('dosis_aplicadas')
-        .select(`
-          id_registro, fecha_aplicacion,
-          pacientes ( id_paciente, nombre_completo, fecha_nacimiento, sexo )
-        `)
-        .eq('id_usuario_atendedor', session.user.id)
-        .order('fecha_aplicacion', { ascending: false });
-
-      // Deduplicar por paciente, quedarnos con la atención más reciente
-      const map = new Map<string, any>();
-      (data ?? []).forEach((d: any) => {
-        if (d.pacientes && !map.has(d.pacientes.id_paciente)) {
-          map.set(d.pacientes.id_paciente, {
-            ...d.pacientes,
-            ultima_atencion: d.fecha_aplicacion,
-          });
-        }
-      });
-      setPacientes(Array.from(map.values()));
+      const pacientes = await pacientesVacunacionService.listarPacientesAtendidosPorUsuario();
+      setPacientes(pacientes);
     } catch (e) {
       console.error(e);
     } finally {

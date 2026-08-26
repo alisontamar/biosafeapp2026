@@ -5,7 +5,7 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
 import { QRPayload } from '../../types';
 
 export const QRScannerScreen = () => {
@@ -46,14 +46,13 @@ export const QRScannerScreen = () => {
         return;
       }
 
-      const { data: paciente, error } = await supabase
-        .from('pacientes')
-        .select('id_paciente, nombre_completo, codigo_qr_token')
-        .eq('id_paciente', payload.id_paciente)
-        .eq('codigo_qr_token', payload.token)
-        .single();
-
-      if (error || !paciente) {
+      let paciente: { id_paciente: string; nombre_completo: string };
+      try {
+        paciente = await pacientesVacunacionService.obtenerPacientePorQR({
+          id_paciente: payload.id_paciente,
+          token: payload.token,
+        });
+      } catch {
         Alert.alert('Paciente no encontrado', 'No se encontró un paciente con este código QR.', [
           { text: 'Reintentar', onPress: resetScanner },
         ]);

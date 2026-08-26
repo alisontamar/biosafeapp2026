@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  FlatList, ActivityIndicator, Alert,
+  FlatList, ActivityIndicator, Alert, Modal, TextInput, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { colors } from '../../theme/colors';
-import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
 import { QRModal } from '../../components/QRModal';
 import { CarnetUploadModal } from '../../components/CarnetUploadModal';
 
@@ -33,6 +33,12 @@ export const ChildDetailScreen = () => {
   const [activeTab, setActiveTab] = useState<'pending' | 'applied'>('pending');
   const [showQR, setShowQR] = useState(false);
   const [showCarnet, setShowCarnet] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [nombreEdit, setNombreEdit] = useState('');
+  const [fechaEdit, setFechaEdit] = useState('');
+  const [sexoEdit, setSexoEdit] = useState<'M' | 'F'>('M');
+  const [embarazadaEdit, setEmbarazadaEdit] = useState(false);
+  const [guardandoEdit, setGuardandoEdit] = useState(false);
 
   useEffect(() => {
     if (id) cargarDatos();
@@ -42,39 +48,17 @@ export const ChildDetailScreen = () => {
     try {
       setLoading(true);
 
-      const { data: paciente, error: pacErr } = await supabase
-        .from('pacientes')
-        .select('*')
-        .eq('id_paciente', id)
-        .single();
-
-      if (pacErr || !paciente) {
+      let paciente: any;
+      try {
+        paciente = await pacientesVacunacionService.obtenerPaciente({ id_paciente: id });
+      } catch {
         Alert.alert('Error', 'No se encontró el paciente.');
         router.back();
         return;
       }
       setChild(paciente);
 
-      const [dosisRes, catalogoRes] = await Promise.all([
-        supabase
-          .from('dosis_aplicadas')
-          .select(`
-            id_registro,
-            fecha_aplicacion,
-            fecha_vencimiento_proxima,
-            lote,
-            cat_vacunas_oficiales ( nombre_enfermedad, dosis_numero )
-          `)
-          .eq('id_paciente', id)
-          .order('fecha_aplicacion', { ascending: false }),
-        supabase
-          .from('cat_vacunas_oficiales')
-          .select('*')
-          .order('edad_meses_ideal', { ascending: true }),
-      ]);
-
-      const dosis = dosisRes.data || [];
-      const catalogo = catalogoRes.data || [];
+      const { dosis, catalogo } = await pacientesVacunacionService.listarDosisDePaciente({ id_paciente: id });
 
       if (catalogo.length === 0) setCatalogEmpty(true);
 
@@ -117,6 +101,38 @@ export const ChildDetailScreen = () => {
       console.error('Error cargando detalle:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const abrirEdicion = () => {
+    if (!child) return;
+    setNombreEdit(child.nombre_completo);
+    setFechaEdit(child.fecha_nacimiento?.slice(0, 10) ?? '');
+    setSexoEdit(child.sexo);
+    setEmbarazadaEdit(!!child.es_embarazada);
+    setShowEdit(true);
+  };
+
+  const guardarEdicion = async () => {
+    if (!nombreEdit.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(fechaEdit)) {
+      Alert.alert('Datos inválidos', 'Revisa el nombre y que la fecha tenga formato AAAA-MM-DD.');
+      return;
+    }
+    setGuardandoEdit(true);
+    try {
+      const actualizado = await pacientesVacunacionService.actualizarPaciente({
+        id_paciente: id,
+        nombre_completo: nombreEdit.trim(),
+        fecha_nacimiento: fechaEdit,
+        sexo: sexoEdit,
+        es_embarazada: sexoEdit === 'F' ? embarazadaEdit : false,
+      });
+      setChild((prev: any) => ({ ...prev, ...actualizado }));
+      setShowEdit(false);
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo guardar el cambio.');
+    } finally {
+      setGuardandoEdit(false);
     }
   };
 
@@ -199,6 +215,9 @@ export const ChildDetailScreen = () => {
           <Text style={styles.childName}>{child?.nombre_completo}</Text>
           <Text style={styles.childAge}>{calcularEdad(child?.fecha_nacimiento)}</Text>
         </View>
+        <TouchableOpacity style={styles.editHeaderBtn} onPress={abrirEdicion}>
+          <Ionicons name="pencil-outline" size={16} color={colors.tertiary} />
+        </TouchableOpacity>
         <TouchableOpacity style={styles.carnetHeaderBtn} onPress={() => setShowCarnet(true)}>
           <Ionicons name="camera-outline" size={18} color={colors.tertiary} />
           <Text style={styles.carnetHeaderBtnText}>Carnet</Text>
@@ -294,6 +313,67 @@ export const ChildDetailScreen = () => {
           nombrePaciente={child.nombre_completo}
         />
       )}
+
+      {/* Modal editar datos del paciente */}
+      <Modal visible={showEdit} animationType="slide" transparent onRequestClose={() => setShowEdit(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Editar datos</Text>
+              <TouchableOpacity onPress={() => setShowEdit(false)}>
+                <Ionicons name="close" size={24} color={colors.secondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.fieldLabel}>Nombre completo</Text>
+            <TextInput style={styles.input} value={nombreEdit} onChangeText={setNombreEdit} autoCapitalize="words" />
+
+            <Text style={styles.fieldLabel}>Fecha de nacimiento (AAAA-MM-DD)</Text>
+            <TextInput
+              style={styles.input}
+              value={fechaEdit}
+              onChangeText={setFechaEdit}
+              keyboardType="numbers-and-punctuation"
+              placeholder="AAAA-MM-DD"
+            />
+
+            <Text style={styles.fieldLabel}>Sexo</Text>
+            <View style={styles.sexoRow}>
+              <TouchableOpacity
+                style={[styles.sexoBtn, sexoEdit === 'M' && styles.sexoBtnActive]}
+                onPress={() => { setSexoEdit('M'); setEmbarazadaEdit(false); }}
+              >
+                <Text style={[styles.sexoText, sexoEdit === 'M' && styles.sexoTextActive]}>Masculino</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.sexoBtn, sexoEdit === 'F' && styles.sexoBtnActive]}
+                onPress={() => setSexoEdit('F')}
+              >
+                <Text style={[styles.sexoText, sexoEdit === 'F' && styles.sexoTextActive]}>Femenino</Text>
+              </TouchableOpacity>
+            </View>
+
+            {sexoEdit === 'F' && (
+              <View style={styles.embarazadaRow}>
+                <Text style={styles.fieldLabel2}>¿Está embarazada actualmente?</Text>
+                <Switch
+                  value={embarazadaEdit}
+                  onValueChange={setEmbarazadaEdit}
+                  trackColor={{ false: '#E5E7EB', true: '#fbcfe8' }}
+                />
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.saveEditBtn, guardandoEdit && { opacity: 0.6 }]}
+              onPress={guardarEdicion}
+              disabled={guardandoEdit}
+            >
+              {guardandoEdit ? <ActivityIndicator color="white" /> : <Text style={styles.saveEditBtnText}>Guardar cambios</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -362,6 +442,15 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
   },
   carnetHeaderBtnText: { fontSize: 12, color: colors.tertiary, fontWeight: '600' },
+  editHeaderBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
 
   statsRow: {
     flexDirection: 'row',
@@ -449,4 +538,35 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   footerBtnPrimaryText: { color: 'white', fontWeight: '700', fontSize: 14 },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  modalContent: {
+    backgroundColor: colors.background, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 20, maxHeight: '85%',
+  },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: colors.secondary },
+  fieldLabel: { fontSize: 12, fontWeight: '700', color: colors.tertiary, marginBottom: 6, marginTop: 12, textTransform: 'uppercase', letterSpacing: 0.4 },
+  fieldLabel2: { fontSize: 14, fontWeight: '600', color: colors.secondary, flex: 1 },
+  input: {
+    backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB',
+    paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: colors.secondary,
+  },
+  sexoRow: { flexDirection: 'row', gap: 10 },
+  sexoBtn: {
+    flex: 1, alignItems: 'center', paddingVertical: 12, borderRadius: 12,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: '#E5E7EB',
+  },
+  sexoBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  sexoText: { fontSize: 13, fontWeight: '600', color: colors.tertiary },
+  sexoTextActive: { color: 'white' },
+  embarazadaRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: 16, padding: 14, backgroundColor: '#fdf2f8', borderRadius: 12,
+  },
+  saveEditBtn: {
+    backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 14,
+    alignItems: 'center', marginTop: 24,
+  },
+  saveEditBtnText: { color: 'white', fontWeight: '700', fontSize: 15 },
 });

@@ -11,8 +11,12 @@ import { Header } from '../../components/Header';
 import { Card } from '../../components/Card';
 import { colors } from '../../theme/colors';
 import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
+import { usuariosService } from '../../services/usuarios.service';
+import { alertasService } from '../../services/alertas.service';
 import { QRModal } from '../../components/QRModal';
 import { CarnetUploadModal } from '../../components/CarnetUploadModal';
+import { getDepartamentoUsuario } from '../../lib/geo';
 
 // ─── Mapas de clima y IA ─────────────────────────────────────────
 const WMO: Record<string, string> = {
@@ -46,6 +50,14 @@ const FALLBACK_RECS = [
 
 type Rec = { icono: string; titulo: string; descripcion: string };
 type ClimaInfo = { temp: number; sensacion: number; desc: string; ciudad: string };
+type AlertaCercana = {
+  id: string;
+  titulo: string;
+  resumen: string;
+  nivel: 'info' | 'warning' | 'critical';
+  departamento: string | null;
+  municipio: string | null;
+};
 
 export const HomeScreen = () => {
   const router = useRouter();
@@ -70,6 +82,9 @@ export const HomeScreen = () => {
 
   // Carnet upload modal
   const [carnetPaciente, setCarnetPaciente] = useState<any>(null);
+
+  // Alerta de brote cercano
+  const [alertaCercana, setAlertaCercana] = useState<AlertaCercana | null>(null);
 
   // Recomendaciones IA
   const [recs, setRecs] = useState<Rec[]>([]);
@@ -102,21 +117,13 @@ export const HomeScreen = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.replace('/login'); return; }
 
-      const { data: profile } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('id_usuario', session.user.id)
-        .single();
+      const profile = await usuariosService.obtenerPerfil();
 
       if (!profile) return;
       setUserData(profile);
 
       if (profile.rol === 'Tutor_PersonaNormal') {
-        const { data: pacientes } = await supabase
-          .from('pacientes')
-          .select('id_paciente, nombre_completo, fecha_nacimiento, sexo, codigo_qr_token')
-          .eq('id_tutor_registro', profile.id_usuario)
-          .order('fecha_registro', { ascending: true });
+        const pacientes = await pacientesVacunacionService.listarHijosDeTutor();
 
         const todos = pacientes || [];
         // El primer registro es el tutor mismo (creado al registrarse)
@@ -125,27 +132,16 @@ export const HomeScreen = () => {
         setHijos(resto);
 
         if (todos.length > 0) {
-          const idsPacientes = todos.map((p) => p.id_paciente);
-          const { data: dosis } = await supabase
-            .from('dosis_aplicadas')
-            .select(`
-              fecha_vencimiento_proxima,
-              cat_vacunas_oficiales ( nombre_enfermedad ),
-              pacientes ( nombre_completo )
-            `)
-            .in('id_paciente', idsPacientes)
-            .not('fecha_vencimiento_proxima', 'is', null)
-            .gte('fecha_vencimiento_proxima', new Date().toISOString())
-            .order('fecha_vencimiento_proxima', { ascending: true })
-            .limit(1)
-            .single();
-
+          const dosis = await pacientesVacunacionService.obtenerProximaVacunaTutor();
           if (dosis) setProximaVacuna(dosis);
         }
 
         // Guardar en refs para el listener de AppState
         profileRef.current = profile;
         pacientesRef.current = todos;
+
+        // Buscar si hay un brote activo en el departamento del usuario
+        cargarAlertaCercana();
 
         // Verificar permiso de ubicación: mostrar modal si nunca se pidió
         const { status } = await Location.getForegroundPermissionsAsync();
@@ -252,16 +248,17 @@ export const HomeScreen = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
+          model: 'openai/gpt-oss-20b',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.6,
-          max_tokens: 350,
+          max_tokens: 700,
+          reasoning_effort: 'low',
           response_format: { type: 'json_object' },
         }),
       });
 
       const groqData = await groqRes.json();
-      const content: string = groqData.choices?.[0]?.message?.content ?? '';
+      const content: string = groqData.choices?.[0]?.message?.content || '{}';
       const parsed = JSON.parse(content);
       const items: Rec[] = parsed.items ?? parsed.recomendaciones ?? parsed;
       setRecs(Array.isArray(items) ? items.slice(0, 3) : FALLBACK_RECS);
@@ -270,6 +267,19 @@ export const HomeScreen = () => {
       setRecs(FALLBACK_RECS);
     } finally {
       setRecsLoading(false);
+    }
+  };
+
+  const cargarAlertaCercana = async () => {
+    try {
+      const dep = await getDepartamentoUsuario();
+      if (!dep) return;
+
+      // Alerta más grave/reciente de ese departamento (ya viene priorizada por el servicio)
+      const alerta = await alertasService.obtenerAlertaCercana({ departamento: dep });
+      if (alerta) setAlertaCercana(alerta as AlertaCercana);
+    } catch (e) {
+      console.log('Alerta cercana error:', e);
     }
   };
 
@@ -297,30 +307,14 @@ export const HomeScreen = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
 
-      const token =
-        typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `biosafe-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const inserted = await pacientesVacunacionService.registrarPaciente({
+        nombre_completo: newName.trim(),
+        fecha_nacimiento: newBirthDate.trim(),
+        sexo: newGender,
+        es_embarazada: false,
+      });
 
-      const { data: inserted, error } = await supabase
-        .from('pacientes')
-        .insert([{
-          id_tutor_registro: session.user.id,
-          nombre_completo: newName.trim(),
-          fecha_nacimiento: newBirthDate.trim(),
-          sexo: newGender,
-          es_embarazada: false,
-          codigo_qr_token: token,
-        }])
-        .select('id_paciente, nombre_completo, codigo_qr_token')
-        .single();
-
-      if (error) throw error;
-
-      await supabase
-        .from('usuarios')
-        .update({ tiene_hijos: true })
-        .eq('id_usuario', session.user.id);
+      await usuariosService.actualizarPerfil({ tiene_hijos: true });
 
       setShowAddModal(false);
       setNewName('');
@@ -351,6 +345,42 @@ export const HomeScreen = () => {
 
   const renderTutorView = () => (
     <>
+      {/* ── Brote cerca de ti ── */}
+      {alertaCercana && (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => router.push('/(tabs)/alerts')}
+          style={[
+            styles.broteCard,
+            alertaCercana.nivel === 'critical'
+              ? { backgroundColor: '#FEE2E2', borderColor: '#EF4444' }
+              : { backgroundColor: '#FFF7ED', borderColor: '#F59E0B' },
+          ]}
+        >
+          <View style={[
+            styles.broteIcon,
+            { backgroundColor: alertaCercana.nivel === 'critical' ? '#EF4444' : '#F59E0B' },
+          ]}>
+            <Ionicons name="warning" size={22} color="white" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={styles.broteHeaderRow}>
+              <Ionicons name="location" size={12} color={alertaCercana.nivel === 'critical' ? '#EF4444' : '#B45309'} />
+              <Text style={[
+                styles.broteUbicacion,
+                { color: alertaCercana.nivel === 'critical' ? '#EF4444' : '#B45309' },
+              ]}>
+                Brote cerca de ti{[alertaCercana.municipio, alertaCercana.departamento].filter(Boolean).length
+                  ? ` · ${[alertaCercana.municipio, alertaCercana.departamento].filter(Boolean).join(', ')}`
+                  : ''}
+              </Text>
+            </View>
+            <Text style={styles.broteTitulo} numberOfLines={2}>{alertaCercana.titulo}</Text>
+            <Text style={styles.broteVer}>Ver detalles →</Text>
+          </View>
+        </TouchableOpacity>
+      )}
+
       {/* ── Mi Carnet (QR del tutor) ── */}
       {tutorPaciente && (
         <>
@@ -688,7 +718,7 @@ export const HomeScreen = () => {
         <View style={styles.locOverlay}>
           <View style={styles.locModal}>
             <View style={styles.locIconWrap}>
-              <Ionicons name="location" size={36} color="#6366F1" />
+              <Ionicons name="location" size={36} color="#676caf" />
             </View>
             <Text style={styles.locTitle}>¿Podemos usar tu ubicación?</Text>
             <Text style={styles.locDesc}>
@@ -731,6 +761,25 @@ const styles = StyleSheet.create({
     marginTop: 24,
     marginBottom: 10,
   },
+
+  // Brote cerca de ti
+  broteCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    padding: 14,
+    marginTop: 16,
+  },
+  broteIcon: {
+    width: 44, height: 44, borderRadius: 12,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  broteHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginBottom: 2 },
+  broteUbicacion: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.3 },
+  broteTitulo: { fontSize: 14, fontWeight: '700', color: '#553b5e', lineHeight: 18 },
+  broteVer: { fontSize: 12, fontWeight: '700', color: '#7e57c2', marginTop: 4 },
 
   // Mi QR card
   myQrCard: {
@@ -981,7 +1030,7 @@ const styles = StyleSheet.create({
   locNote: { fontSize: 12, color: '#9CA3AF', textAlign: 'center', marginBottom: 24, fontStyle: 'italic' },
   locBtnPrimary: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#6366F1', borderRadius: 16,
+    backgroundColor: '#8a8be2', borderRadius: 16,
     paddingVertical: 15, paddingHorizontal: 28,
     width: '100%', justifyContent: 'center', marginBottom: 10,
   },

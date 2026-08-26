@@ -7,6 +7,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
+import { usuariosService } from '../../services/usuarios.service';
 import { colors } from '../../theme/colors';
 import { LABEL_ROL, RolUsuario } from '../../types';
 
@@ -29,48 +31,18 @@ export const HealthDashboardScreen = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.replace('/login'); return; }
 
-      const { data: perfil } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('id_usuario', session.user.id)
-        .single();
+      const perfil = await usuariosService.obtenerPerfil();
       if (!perfil) return;
       setUserData(perfil);
 
-      const hoy = new Date();
-      const inicioHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate()).toISOString();
-      const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
-
-      const [resHoy, resMes, resRecientes, resCatalogo] = await Promise.all([
-        supabase
-          .from('dosis_aplicadas')
-          .select('id_registro', { count: 'exact', head: true })
-          .eq('id_usuario_atendedor', session.user.id)
-          .gte('fecha_aplicacion', inicioHoy),
-        supabase
-          .from('dosis_aplicadas')
-          .select('id_registro', { count: 'exact', head: true })
-          .eq('id_usuario_atendedor', session.user.id)
-          .gte('fecha_aplicacion', inicioMes),
-        supabase
-          .from('dosis_aplicadas')
-          .select(`
-            id_registro, fecha_aplicacion,
-            cat_vacunas_oficiales ( nombre_enfermedad, dosis_numero ),
-            pacientes ( nombre_completo )
-          `)
-          .eq('id_usuario_atendedor', session.user.id)
-          .order('fecha_aplicacion', { ascending: false })
-          .limit(4),
-        supabase
-          .from('cat_vacunas_oficiales')
-          .select('*')
-          .order('edad_meses_ideal', { ascending: true }),
+      const [estadisticas, catalogo] = await Promise.all([
+        pacientesVacunacionService.obtenerEstadisticasAtencion(),
+        pacientesVacunacionService.listarCatalogoVacunas(),
       ]);
 
-      setStats({ hoy: resHoy.count ?? 0, dosisHoy: resHoy.count ?? 0, mes: resMes.count ?? 0 });
-      setRecientes(resRecientes.data ?? []);
-      setCatalogo(resCatalogo.data ?? []);
+      setStats({ hoy: estadisticas.hoy, dosisHoy: estadisticas.hoy, mes: estadisticas.mes });
+      setRecientes(estadisticas.recientes);
+      setCatalogo(catalogo);
     } catch (e) {
       console.error(e);
     } finally {

@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import QRCode from 'react-native-qrcode-svg';
 import { colors } from '../../theme/colors';
 import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
 import { useRouter } from 'expo-router';
 
 export const QRScreen = () => {
@@ -20,12 +21,7 @@ export const QRScreen = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.replace('/login'); return; }
 
-      const { data: pacientes } = await supabase
-        .from('pacientes')
-        .select('*')
-        .eq('id_tutor_registro', session.user.id)
-        .order('fecha_registro', { ascending: true })
-        .limit(1);
+      const pacientes = await pacientesVacunacionService.listarHijosDeTutor();
 
       if (pacientes && pacientes.length > 0) {
         setPaciente(pacientes[0]);

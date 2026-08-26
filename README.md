@@ -10,7 +10,9 @@ Aplicación móvil desarrollada en React Native (Expo) para gestionar el esquema
 |---|---|
 | Framework | React Native + Expo SDK 54 |
 | Enrutamiento | Expo Router v6 (file-based) |
-| Backend / DB | Supabase (PostgreSQL + Auth + Storage) |
+| Backend | 6 microservicios en Supabase Edge Functions (Deno) — ver [Arquitectura de microservicios](docs/ARQUITECTURA_MICROSERVICIOS.md) |
+| DB | Supabase PostgreSQL (una sola base, RLS cerrado — solo `service_role` accede) |
+| Auth | Supabase Auth |
 | Lenguaje | TypeScript |
 | Navegación | React Navigation (bottom tabs + stack) |
 | Cámara / QR | expo-camera v17 (`CameraView`) |
@@ -20,7 +22,9 @@ Aplicación móvil desarrollada en React Native (Expo) para gestionar el esquema
 | Iconos | @expo/vector-icons (Ionicons) |
 | Ubicación | expo-location (GPS + geocodificación inversa) |
 | Clima | OpenMeteo API (gratis, sin API key) |
-| IA / LLM | Groq API — modelo `llama-3.1-8b-instant` |
+| IA / LLM | Groq API — modelo `openai/gpt-oss-20b` (texto) y `qwen/qwen3.6-27b` (visión, lectura de carnets) |
+
+> **La app cliente ya no habla directo con la base de datos.** Toda la lógica de negocio vive en `supabase/functions/*-service/` y se llama desde `src/services/*.service.ts` vía `supabase.functions.invoke(...)`. El detalle completo de cada servicio, sus acciones y el porqué de esa arquitectura está en [`docs/ARQUITECTURA_MICROSERVICIOS.md`](docs/ARQUITECTURA_MICROSERVICIOS.md).
 
 ---
 
@@ -81,6 +85,7 @@ Accesible para `Tutor_PersonaNormal`.
 - Historial de vacunas aplicadas (con fecha, lote, origen)
 - Vacunas pendientes según el esquema PAI Bolivia
 - Botón para subir carnet físico (foto, galería o PDF)
+- Botón de editar (lápiz) para corregir nombre, fecha de nacimiento, sexo o embarazo del paciente
 
 #### Educación (`education`)
 - Artículos y videos educativos sobre vacunación
@@ -95,8 +100,8 @@ Accesible para `Tutor_PersonaNormal`.
 #### Carnet físico (modal reutilizable)
 - Subida de carnet de vacunación físico antiguo
 - Soporta: foto con cámara, imagen de galería, archivo PDF
-- Almacenado en Supabase Storage (bucket `cartillas-fisicas`)
-- Registrado en tabla `cartillas_fisicas_imagenes`
+- La IA (Groq, vía `carnet-ocr-service`) extrae las dosis y se guardan en `dosis_aplicadas`
+- **Nota:** la imagen/PDF original no se almacena — solo se usa para la extracción y se descarta. La tabla `cartillas_fisicas_imagenes` existe en el esquema pero no está en uso (pendiente si se decide guardar el archivo original)
 
 ---
 
@@ -134,6 +139,8 @@ Accesible para `Medico`, `Enfermero`, `Farmaceutico`.
   - Fondo rojo: **atrasada** (el paciente ya superó la edad ideal y no se aplicó)
 - **Historial de dosis aplicadas** con fecha, lote, origen y **edad del paciente al momento de vacunarse**
 - Botón "Agregar nueva dosis"
+- Botón de editar (lápiz, header) para corregir datos del paciente
+- Tap en una dosis aplicada → corregir fecha/lote/próxima cita o eliminarla (por si se registró mal)
 
 #### Registrar dosis (`register-dose`)
 - Picker con catálogo completo de vacunas PAI Bolivia
@@ -176,7 +183,7 @@ Accesible para `SuperAdmin` y `AdminEstablecimiento`.
 
 #### Establecimientos (`establecimientos`)
 
-**SuperAdmin:** Lista de todos los centros de salud y farmacias con fecha de registro. Botón para crear nuevo.
+**SuperAdmin:** Lista de todos los centros de salud y farmacias con fecha de registro. Botón para crear nuevo. Tap en un centro → editar sus datos o eliminarlo (bloqueado si todavía tiene personal asignado).
 
 **AdminEstablecimiento:** Vista de solo su propio establecimiento (nombre, ciudad, tipo).
 
@@ -184,12 +191,18 @@ Accesible para `SuperAdmin` y `AdminEstablecimiento`.
 - Nombre, ciudad/municipio, tipo (Centro de Salud / Farmacia)
 - Guarda en tabla `establecimientos`
 
+#### Catálogo de vacunas (`catalogo-vacunas`) — Solo SuperAdmin
+- Lista del esquema PAI Bolivia (`cat_vacunas_oficiales`)
+- Crear, editar y eliminar vacunas del catálogo (nombre, número de dosis, edad ideal en meses)
+- No se puede eliminar una vacuna si ya hay dosis aplicadas registradas con ella
+
 #### Usuarios (`usuarios`)
 - Lista de usuarios con avatar coloreado por rol, nombre, correo, establecimiento
 - Búsqueda por nombre o correo
 - **SuperAdmin:** ve todos los usuarios del sistema
 - **AdminEstablecimiento:** ve solo el personal de su establecimiento
 - Botón para crear nuevo usuario
+- Tap en un usuario → editar nombre/rol, activar/desactivar la cuenta (bloquea el acceso sin borrar historial), o eliminarla definitivamente (no disponible para tutores, para no dejar huérfanos a sus hijos — en ese caso solo se puede desactivar)
 
 #### Crear usuario (`create-user`)
 - Nombre, correo, contraseña temporal, rol (limitado según quien crea)
@@ -244,6 +257,7 @@ app/
     ├── perfil.tsx
     ├── create-user.tsx         (href: null)
     ├── create-establishment.tsx (href: null)
+    ├── catalogo-vacunas.tsx    (href: null, solo SuperAdmin)
     ├── scanner.tsx             (href: null)
     ├── patient-detail.tsx      (href: null)
     ├── register-dose.tsx       (href: null)
@@ -259,7 +273,7 @@ app/
 | Tabla | Descripción |
 |---|---|
 | `establecimientos` | Centros de salud y farmacias del sistema |
-| `usuarios` | Todos los usuarios con rol y establecimiento asignado |
+| `usuarios` | Todos los usuarios con rol, establecimiento asignado y estado (`activo`) |
 | `pacientes` | Expedientes clínicos con código QR único |
 | `cat_vacunas_oficiales` | Catálogo maestro del esquema PAI Bolivia |
 | `dosis_aplicadas` | Historial transaccional de vacunación |
@@ -303,35 +317,32 @@ npm run dev
 # o: npx expo start
 ```
 
-### 4. Configurar Supabase
+### 4. Desplegar los microservicios (Supabase Edge Functions)
 
-#### Storage bucket
-Crear el bucket `cartillas-fisicas` con acceso público en:
-`Supabase Dashboard → Storage → New Bucket`
+La app no funciona sin esto — toda la lectura/escritura de datos pasa por estas funciones (ver [`docs/ARQUITECTURA_MICROSERVICIOS.md`](docs/ARQUITECTURA_MICROSERVICIOS.md)):
 
-Política RLS para uploads:
-```sql
-CREATE POLICY "authenticated_upload" ON storage.objects
-FOR INSERT WITH CHECK (
-  bucket_id = 'cartillas-fisicas' AND auth.role() = 'authenticated'
-);
+```bash
+supabase link --project-ref tu-project-ref
+supabase functions deploy usuarios-service --project-ref tu-project-ref
+supabase functions deploy pacientes-vacunacion-service --project-ref tu-project-ref
+supabase functions deploy establecimientos-service --project-ref tu-project-ref
+supabase functions deploy carnet-ocr-service --project-ref tu-project-ref
+supabase functions deploy alertas-service --project-ref tu-project-ref
+supabase functions deploy dashboard-service --project-ref tu-project-ref
 ```
 
-#### Política RLS para creación de usuarios por admins
-```sql
--- Permite al admin insertar usuarios en nombre de otros
-CREATE POLICY "admins_can_insert_users" ON usuarios
-FOR INSERT WITH CHECK (
-  id_usuario = auth.uid()
-  OR EXISTS (
-    SELECT 1 FROM usuarios
-    WHERE id_usuario = auth.uid()
-    AND rol IN ('SuperAdmin', 'AdminEstablecimiento')
-  )
-);
-```
+Secrets que necesitan las funciones (`supabase secrets set NOMBRE=valor --project-ref tu-project-ref`):
 
-### 5. Crear SuperAdmin inicial
+| Secret | Usado por |
+|---|---|
+| `GROQ_API_KEY` | `carnet-ocr-service`, `generate-alerts` |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | todos los servicios (Supabase los inyecta automáticamente) |
+
+### 5. RLS y permisos de las tablas
+
+Las tablas de negocio (`usuarios`, `pacientes`, `dosis_aplicadas`, `establecimientos`, `cat_vacunas_oficiales`, `alertas_epidemiologicas_ia`) tienen RLS activo **sin políticas** — nadie puede leer/escribir directo, ni siquiera con la anon key. Solo las Edge Functions (con `service_role`, que bypassa RLS) pueden tocarlas. Ver la migración `supabase/migrations/20260825_lockdown_rls_microservicios.sql`. No hace falta (ni se debe) agregar policies de RLS para que la app funcione — si algo nuevo necesita acceso a una tabla, se agrega como acción al microservicio dueño de esa tabla.
+
+### 6. Crear SuperAdmin inicial
 
 Ejecutar en el SQL Editor de Supabase después de crear el usuario en Authentication:
 
@@ -358,14 +369,14 @@ VALUES (
 
 ### Alertas epidemiológicas (pestaña Alertas — tutor)
 
-Pipeline automático que corre **una vez al día** via Supabase Edge Function + `pg_cron`:
+Pipeline automático que corre **una vez al día** vía Supabase Edge Function + cron (lado escritura, `generate-alerts`):
 
-1. **Tavily** busca en dominios oficiales (`paho.org`, `who.int`, `minsalud.gob.bo`, `cdc.gov`) limitando resultados a los últimos 30 días.
-2. **Groq** (`llama-3.1-8b-instant`) sintetiza 2–4 alertas en español con nivel `info | warning | critical`.
+1. **Google News RSS** busca noticias de salud en medios y fuentes oficiales de Bolivia (gratis, sin API key, casi en tiempo real).
+2. **Groq** (`openai/gpt-oss-20b`) sintetiza 2–4 alertas en español con nivel `info | warning | critical`, y extrae departamento/municipio/enfermedad para geolocalizar el brote.
 3. Las alertas anteriores se desactivan y se insertan las nuevas en `alertas_epidemiologicas_ia`.
-4. Todos los usuarios leen la misma tabla — **2 búsquedas Tavily/día** (~60/mes, dentro del free tier de 1.000/mes).
+4. La app lee las alertas a través de `alertas-service` (acciones `listarActivas` / `obtenerAlertaCercana`), que también arma la tarjeta "Brote cerca de ti" en Home según el departamento del usuario.
 
-Archivos: `supabase/functions/generate-alerts/index.ts` · Migración: `supabase/migrations/20260608_alertas_ia.sql`
+Archivos: `supabase/functions/generate-alerts/index.ts` (escritura) · `supabase/functions/alertas-service/index.ts` (lectura) · Migraciones: `supabase/migrations/20260608_alertas_ia.sql`, `20260630_alertas_geo.sql`
 
 **Documentación técnica detallada:** [`supabase/functions/generate-alerts/README.md`](supabase/functions/generate-alerts/README.md)
 
@@ -379,29 +390,35 @@ Al abrir la app, el módulo de recomendaciones sigue este flujo:
 2. **Obtener ubicación** — GPS si el permiso fue otorgado; fallback a geolocalización por IP (`ip-api.com`); fallback final a La Paz (lat `-16.5`, lon `-68.15`).
 3. **Clima actual** — Consulta a OpenMeteo API (gratuita, sin API key). Obtiene temperatura, sensación térmica, código WMO del clima y velocidad del viento.
 4. **Contexto familiar** — Detecta si el tutor tiene bebés (<12 meses), niños (12–144 meses) o si el titular está embarazado.
-5. **Generación con Groq** — Envía clima + contexto familiar al modelo `llama-3.1-8b-instant` y recibe 4 tarjetas `{ icono, titulo, descripcion }` en JSON. Si el LLM falla, se usan tarjetas de fallback estáticas.
+5. **Generación con Groq** — Envía clima + contexto familiar al modelo `openai/gpt-oss-20b` y recibe 4 tarjetas `{ icono, titulo, descripcion }` en JSON. Si el LLM falla, se usan tarjetas de fallback estáticas.
 6. **Cadencia de refresco** — Solo cuando la app vuelve del fondo (`AppState: background → active`), no en cada cambio de pestaña.
 
 Iconos disponibles para las tarjetas: `sunny`, `rainy`, `cold`, `hot`, `wind`, `baby`, `child`, `pregnant`, `shield`, `medical`.
 
 ---
 
-## Estado del proyecto (junio 2026)
+## Estado del proyecto (2026-08-25)
 
 | Módulo | Estado |
 |---|---|
+| Migración a microservicios (6 Edge Functions + RLS cerrado) | Completo |
 | Autenticación y roles | Completo |
 | Onboarding | Completo |
 | Registro padre/tutor | Completo |
 | Home tutor (QR, hijos, próxima vacuna) | Completo |
-| Detalle hijo (historial PAI, carnet físico) | Completo |
+| Detalle hijo (historial PAI, carnet físico, editar datos) | Completo |
 | Centro de Salud — Scanner QR | Completo |
 | Centro de Salud — Vacunación rápida | Completo |
-| Centro de Salud — Expediente y registro de dosis | Completo |
+| Centro de Salud — Expediente, registro y corrección de dosis | Completo |
 | Administración — Dashboard y estadísticas | Completo |
-| Administración — Gestión de establecimientos | Completo |
-| Administración — Creación de usuarios con carnet | Completo |
+| Administración — Gestión de establecimientos (crear/editar/eliminar) | Completo |
+| Administración — Gestión de usuarios (crear/editar/activar-desactivar/eliminar) | Completo |
+| Administración — Catálogo de vacunas (crear/editar/eliminar) | Completo |
 | Scanner QR desde panel admin | Completo |
 | Recomendaciones de salud con IA (Home) | Completo |
-| Alertas epidemiológicas por IA (Tavily + Groq) | Completo — requiere deploy Edge Function |
+| Alertas epidemiológicas por IA (Google News RSS + Groq) | Completo |
 | Educación (artículos/videos) | Estructura lista (contenido pendiente) |
+| Recuperar contraseña ("olvidé mi contraseña") | Pendiente |
+| Editar perfil propio (nombre/correo/contraseña) | Pendiente |
+| Subir y conservar la imagen original del carnet físico | Pendiente (hoy solo se extraen los datos, no se guarda el archivo) |
+| Auto-login por sesión persistente al abrir la app | Deshabilitado a propósito (etapa de desarrollo, un solo dispositivo para probar todos los roles) |

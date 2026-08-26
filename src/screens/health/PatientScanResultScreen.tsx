@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, SafeAreaView,
-  TouchableOpacity, ActivityIndicator,
+  TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter, useSegments } from 'expo-router';
-import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
 
 export const PatientScanResultScreen = () => {
   const { id_paciente, grupo } = useLocalSearchParams<{ id_paciente: string; grupo?: string }>();
@@ -19,33 +19,31 @@ export const PatientScanResultScreen = () => {
   const [dosis, setDosis] = useState<any[]>([]);
   const [catalogo, setCatalogo] = useState<any[]>([]);
 
+  const [showEditPaciente, setShowEditPaciente] = useState(false);
+  const [nombreEdit, setNombreEdit] = useState('');
+  const [fechaNacEdit, setFechaNacEdit] = useState('');
+  const [guardandoPaciente, setGuardandoPaciente] = useState(false);
+
+  const [dosisEdit, setDosisEdit] = useState<any>(null);
+  const [fechaAplicEdit, setFechaAplicEdit] = useState('');
+  const [loteEdit, setLoteEdit] = useState('');
+  const [proximaCitaEdit, setProximaCitaEdit] = useState('');
+  const [guardandoDosis, setGuardandoDosis] = useState(false);
+
   const cargar = useCallback(async () => {
     if (!id_paciente) return;
     setLoading(true);
     try {
-      const [resPaciente, resDosis, resCatalogo] = await Promise.all([
-        supabase
-          .from('pacientes')
-          .select('*, usuarios(nombre_completo, correo_electronico)')
-          .eq('id_paciente', id_paciente)
-          .single(),
-        supabase
-          .from('dosis_aplicadas')
-          .select(`
-            id_registro, fecha_aplicacion, lote, origen_registro,
-            cat_vacunas_oficiales ( id_vacuna, nombre_enfermedad, dosis_numero, edad_meses_ideal )
-          `)
-          .eq('id_paciente', id_paciente)
-          .order('fecha_aplicacion', { ascending: true }),
-        supabase
-          .from('cat_vacunas_oficiales')
-          .select('*')
-          .order('edad_meses_ideal', { ascending: true }),
+      const [pacienteData, { dosis: dosisData, catalogo: catalogoData }] = await Promise.all([
+        pacientesVacunacionService.obtenerPaciente({ id_paciente }),
+        pacientesVacunacionService.listarDosisDePaciente({ id_paciente }),
       ]);
 
-      if (resPaciente.data) setPaciente(resPaciente.data);
-      setDosis(resDosis.data ?? []);
-      setCatalogo(resCatalogo.data ?? []);
+      setPaciente(pacienteData);
+      // El expediente ordena las dosis ascendente por fecha; el servicio las
+      // devuelve descendente (para ChildDetailScreen), así que se invierte aquí.
+      setDosis([...dosisData].reverse());
+      setCatalogo(catalogoData);
     } catch (e) {
       console.error(e);
     } finally {
@@ -71,6 +69,89 @@ export const PatientScanResultScreen = () => {
   };
 
   const calcularEdad = (fechaNac: string) => formatMeses(edadEnMeses(fechaNac));
+
+  const abrirEditarPaciente = () => {
+    setNombreEdit(paciente.nombre_completo);
+    setFechaNacEdit(paciente.fecha_nacimiento?.slice(0, 10) ?? '');
+    setShowEditPaciente(true);
+  };
+
+  const guardarPaciente = async () => {
+    if (!nombreEdit.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(fechaNacEdit)) {
+      Alert.alert('Datos inválidos', 'Revisa el nombre y que la fecha tenga formato AAAA-MM-DD.');
+      return;
+    }
+    setGuardandoPaciente(true);
+    try {
+      const actualizado = await pacientesVacunacionService.actualizarPaciente({
+        id_paciente,
+        nombre_completo: nombreEdit.trim(),
+        fecha_nacimiento: fechaNacEdit,
+      });
+      setPaciente((prev: any) => ({ ...prev, ...actualizado }));
+      setShowEditPaciente(false);
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo guardar el cambio.');
+    } finally {
+      setGuardandoPaciente(false);
+    }
+  };
+
+  const abrirEditarDosis = (d: any) => {
+    setDosisEdit(d);
+    setFechaAplicEdit(d.fecha_aplicacion?.slice(0, 10) ?? '');
+    setLoteEdit(d.lote ?? '');
+    setProximaCitaEdit(d.fecha_vencimiento_proxima?.slice(0, 10) ?? '');
+  };
+
+  const guardarDosis = async () => {
+    if (!dosisEdit) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaAplicEdit)) {
+      Alert.alert('Fecha inválida', 'Usa el formato AAAA-MM-DD.');
+      return;
+    }
+    setGuardandoDosis(true);
+    try {
+      await pacientesVacunacionService.actualizarDosis({
+        id_registro: dosisEdit.id_registro,
+        fecha_aplicacion: fechaAplicEdit,
+        lote: loteEdit.trim() || null,
+        fecha_vencimiento_proxima: proximaCitaEdit && /^\d{4}-\d{2}-\d{2}$/.test(proximaCitaEdit) ? proximaCitaEdit : null,
+      });
+      setDosisEdit(null);
+      cargar();
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo guardar el cambio.');
+    } finally {
+      setGuardandoDosis(false);
+    }
+  };
+
+  const confirmarEliminarDosis = () => {
+    if (!dosisEdit) return;
+    Alert.alert(
+      'Eliminar dosis',
+      `¿Eliminar el registro de "${dosisEdit.cat_vacunas_oficiales?.nombre_enfermedad ?? 'esta vacuna'}"? Esta acción no se puede deshacer.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Eliminar', style: 'destructive', onPress: eliminarDosis },
+      ],
+    );
+  };
+
+  const eliminarDosis = async () => {
+    if (!dosisEdit) return;
+    setGuardandoDosis(true);
+    try {
+      await pacientesVacunacionService.eliminarDosis({ id_registro: dosisEdit.id_registro });
+      setDosisEdit(null);
+      cargar();
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo eliminar la dosis.');
+    } finally {
+      setGuardandoDosis(false);
+    }
+  };
 
   const vacunasAplicadasIds = new Set(dosis.map((d) => d.cat_vacunas_oficiales?.id_vacuna));
   const pendientes = catalogo.filter((v) => !vacunasAplicadasIds.has(v.id_vacuna));
@@ -108,7 +189,9 @@ export const PatientScanResultScreen = () => {
             <Ionicons name="arrow-back" size={22} color="white" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Expediente del Paciente</Text>
-          <View style={{ width: 22 }} />
+          <TouchableOpacity onPress={abrirEditarPaciente}>
+            <Ionicons name="pencil-outline" size={20} color="white" />
+          </TouchableOpacity>
         </View>
 
         {/* Tarjeta paciente */}
@@ -207,7 +290,7 @@ export const PatientScanResultScreen = () => {
           dosis.map((d) => {
             const edadAlAplicar = edadEnMeses(paciente.fecha_nacimiento, d.fecha_aplicacion);
             return (
-              <View key={d.id_registro} style={styles.vacunaRow}>
+              <TouchableOpacity key={d.id_registro} style={styles.vacunaRow} onPress={() => abrirEditarDosis(d)}>
                 <View style={[styles.vacunaIcon, { backgroundColor: 'rgba(162,129,186,0.1)' }]}>
                   <Ionicons name="shield-checkmark" size={16} color="#a281ba" />
                 </View>
@@ -229,13 +312,76 @@ export const PatientScanResultScreen = () => {
                     day: '2-digit', month: 'short', year: 'numeric',
                   })}
                 </Text>
-              </View>
+                <Ionicons name="pencil-outline" size={14} color="#D1D5DB" style={{ marginLeft: 6 }} />
+              </TouchableOpacity>
             );
           })
         )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Modal editar paciente */}
+      <Modal visible={showEditPaciente} animationType="slide" transparent onRequestClose={() => setShowEditPaciente(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Editar paciente</Text>
+              <TouchableOpacity onPress={() => setShowEditPaciente(false)}>
+                <Ionicons name="close" size={24} color="#553b5e" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.fieldLabel}>Nombre completo</Text>
+            <TextInput style={styles.input} value={nombreEdit} onChangeText={setNombreEdit} autoCapitalize="words" />
+            <Text style={styles.fieldLabel}>Fecha de nacimiento (AAAA-MM-DD)</Text>
+            <TextInput style={styles.input} value={fechaNacEdit} onChangeText={setFechaNacEdit} keyboardType="numbers-and-punctuation" />
+            <TouchableOpacity
+              style={[styles.saveModalBtn, guardandoPaciente && { opacity: 0.6 }]}
+              onPress={guardarPaciente}
+              disabled={guardandoPaciente}
+            >
+              {guardandoPaciente ? <ActivityIndicator color="white" /> : <Text style={styles.saveModalBtnText}>Guardar cambios</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal editar/eliminar dosis */}
+      <Modal visible={!!dosisEdit} animationType="slide" transparent onRequestClose={() => setDosisEdit(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Corregir dosis</Text>
+              <TouchableOpacity onPress={() => setDosisEdit(null)}>
+                <Ionicons name="close" size={24} color="#553b5e" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalVacunaNombre}>{dosisEdit?.cat_vacunas_oficiales?.nombre_enfermedad}</Text>
+
+            <Text style={styles.fieldLabel}>Fecha de aplicación (AAAA-MM-DD)</Text>
+            <TextInput style={styles.input} value={fechaAplicEdit} onChangeText={setFechaAplicEdit} keyboardType="numbers-and-punctuation" />
+
+            <Text style={styles.fieldLabel}>Número de lote</Text>
+            <TextInput style={styles.input} value={loteEdit} onChangeText={setLoteEdit} placeholder="Opcional" placeholderTextColor="#8e8e99" />
+
+            <Text style={styles.fieldLabel}>Próxima cita (AAAA-MM-DD)</Text>
+            <TextInput style={styles.input} value={proximaCitaEdit} onChangeText={setProximaCitaEdit} placeholder="Opcional" placeholderTextColor="#8e8e99" keyboardType="numbers-and-punctuation" />
+
+            <TouchableOpacity
+              style={[styles.saveModalBtn, guardandoDosis && { opacity: 0.6 }]}
+              onPress={guardarDosis}
+              disabled={guardandoDosis}
+            >
+              {guardandoDosis ? <ActivityIndicator color="white" /> : <Text style={styles.saveModalBtnText}>Guardar cambios</Text>}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.deleteModalBtn} onPress={confirmarEliminarDosis} disabled={guardandoDosis}>
+              <Ionicons name="trash-outline" size={18} color="#EF4444" />
+              <Text style={styles.deleteModalBtnText}>Eliminar esta dosis</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -314,4 +460,29 @@ const styles = StyleSheet.create({
   vacunaFecha: { fontSize: 11, color: '#8e8e99', textAlign: 'right', minWidth: 60 },
   emptyState: { alignItems: 'center', paddingVertical: 32 },
   emptyText: { fontSize: 14, color: '#8e8e99', marginTop: 10 },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  modalContent: {
+    backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 20, maxHeight: '85%',
+  },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#553b5e' },
+  modalVacunaNombre: { fontSize: 13, color: '#8e8e99', marginBottom: 8 },
+  fieldLabel: { fontSize: 12, fontWeight: '700', color: '#8e8e99', marginBottom: 6, marginTop: 12, textTransform: 'uppercase', letterSpacing: 0.4 },
+  input: {
+    backgroundColor: '#F8F9FA', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB',
+    paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#553b5e',
+  },
+  saveModalBtn: {
+    backgroundColor: '#a281ba', borderRadius: 14, paddingVertical: 14,
+    alignItems: 'center', marginTop: 20,
+  },
+  saveModalBtnText: { color: 'white', fontWeight: '700', fontSize: 15 },
+  deleteModalBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 14, paddingVertical: 14, borderRadius: 14,
+    borderWidth: 1, borderColor: '#FEE2E2',
+  },
+  deleteModalBtnText: { color: '#EF4444', fontWeight: '700', fontSize: 14 },
 });

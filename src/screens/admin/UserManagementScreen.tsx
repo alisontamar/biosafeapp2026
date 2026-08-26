@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, FlatList,
-  TouchableOpacity, ActivityIndicator, TextInput,
+  TouchableOpacity, ActivityIndicator, TextInput, Modal, Alert, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { supabase } from '../../lib/supabase';
-import { LABEL_ROL, RolUsuario } from '../../types';
+import { usuariosService } from '../../services/usuarios.service';
+import { LABEL_ROL, RolUsuario, ROLES_SALUD } from '../../types';
 
 const ROL_COLOR: Partial<Record<RolUsuario, string>> = {
   SuperAdmin: '#a281ba',
@@ -17,38 +17,40 @@ const ROL_COLOR: Partial<Record<RolUsuario, string>> = {
   Tutor_PersonaNormal: '#10B981',
 };
 
+const ROLES_EDITABLES_ADMIN_EST: RolUsuario[] = [...ROLES_SALUD, 'Tutor_PersonaNormal'];
+const ROLES_EDITABLES_SUPER: RolUsuario[] = ['AdminEstablecimiento', ...ROLES_SALUD, 'Tutor_PersonaNormal'];
+
+type UsuarioItem = {
+  id_usuario: string;
+  nombre_completo: string;
+  correo_electronico: string;
+  rol: RolUsuario;
+  activo: boolean;
+  establecimientos?: { nombre_establecimiento: string } | null;
+};
+
 export const UserManagementScreen = () => {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [usuarios, setUsuarios] = useState<any[]>([]);
+  const [usuarios, setUsuarios] = useState<UsuarioItem[]>([]);
   const [busqueda, setBusqueda] = useState('');
-  const [miRol, setMiRol] = useState<string>('');
+  const [miRol, setMiRol] = useState<RolUsuario | null>(null);
+
+  const [seleccionado, setSeleccionado] = useState<UsuarioItem | null>(null);
+  const [nombreEdit, setNombreEdit] = useState('');
+  const [rolEdit, setRolEdit] = useState<RolUsuario | null>(null);
+  const [showRoles, setShowRoles] = useState(false);
+  const [guardando, setGuardando] = useState(false);
 
   const cargar = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-
-      const { data: perfil } = await supabase
-        .from('usuarios')
-        .select('rol, id_establecimiento')
-        .eq('id_usuario', session.user.id)
-        .single();
-      if (!perfil) return;
-      setMiRol(perfil.rol);
-
-      let query = supabase
-        .from('usuarios')
-        .select('id_usuario, nombre_completo, correo_electronico, rol, fecha_registro, establecimientos(nombre_establecimiento)')
-        .order('fecha_registro', { ascending: false });
-
-      if (perfil.rol === 'AdminEstablecimiento' && perfil.id_establecimiento) {
-        query = query.eq('id_establecimiento', perfil.id_establecimiento);
-      }
-
-      const { data } = await query;
-      setUsuarios(data ?? []);
+      const [perfil, usuarios] = await Promise.all([
+        usuariosService.obtenerPerfil(),
+        usuariosService.listarUsuarios(),
+      ]);
+      setMiRol(perfil.rol as RolUsuario);
+      setUsuarios(usuarios);
     } catch (e) {
       console.error(e);
     } finally {
@@ -63,6 +65,80 @@ export const UserManagementScreen = () => {
       u.nombre_completo.toLowerCase().includes(busqueda.toLowerCase()) ||
       u.correo_electronico.toLowerCase().includes(busqueda.toLowerCase())
   );
+
+  const abrirGestion = (u: UsuarioItem) => {
+    setSeleccionado(u);
+    setNombreEdit(u.nombre_completo);
+    setRolEdit(u.rol);
+  };
+
+  const cerrarGestion = () => {
+    setSeleccionado(null);
+    setShowRoles(false);
+  };
+
+  const rolesDisponibles = miRol === 'SuperAdmin' ? ROLES_EDITABLES_SUPER : ROLES_EDITABLES_ADMIN_EST;
+
+  const guardarCambios = async () => {
+    if (!seleccionado) return;
+    setGuardando(true);
+    try {
+      await usuariosService.actualizarUsuario({
+        id_usuario: seleccionado.id_usuario,
+        nombre_completo: nombreEdit.trim() || undefined,
+        rol: rolEdit && rolEdit !== seleccionado.rol ? rolEdit : undefined,
+      });
+      cerrarGestion();
+      cargar();
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo guardar el cambio.');
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  const alternarActivo = async () => {
+    if (!seleccionado) return;
+    setGuardando(true);
+    try {
+      await usuariosService.cambiarEstadoUsuario({
+        id_usuario: seleccionado.id_usuario,
+        activo: !seleccionado.activo,
+      });
+      cerrarGestion();
+      cargar();
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo cambiar el estado.');
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  const confirmarEliminar = () => {
+    if (!seleccionado) return;
+    Alert.alert(
+      'Eliminar usuario',
+      `¿Eliminar a ${seleccionado.nombre_completo} definitivamente? Esta acción no se puede deshacer.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Eliminar', style: 'destructive', onPress: eliminarUsuario },
+      ],
+    );
+  };
+
+  const eliminarUsuario = async () => {
+    if (!seleccionado) return;
+    setGuardando(true);
+    try {
+      await usuariosService.eliminarUsuario({ id_usuario: seleccionado.id_usuario });
+      cerrarGestion();
+      cargar();
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo eliminar el usuario.');
+    } finally {
+      setGuardando(false);
+    }
+  };
 
   if (loading) {
     return <View style={styles.center}><ActivityIndicator size="large" color="#a281ba" /></View>;
@@ -107,9 +183,9 @@ export const UserManagementScreen = () => {
           </View>
         }
         renderItem={({ item }) => {
-          const color = ROL_COLOR[item.rol as RolUsuario] ?? '#8e8e99';
+          const color = ROL_COLOR[item.rol] ?? '#8e8e99';
           return (
-            <View style={styles.card}>
+            <TouchableOpacity style={[styles.card, !item.activo && styles.cardInactivo]} onPress={() => abrirGestion(item)}>
               <View style={[styles.avatar, { backgroundColor: `${color}18` }]}>
                 <Ionicons name="person" size={20} color={color} />
               </View>
@@ -119,16 +195,90 @@ export const UserManagementScreen = () => {
                 {item.establecimientos && (
                   <Text style={styles.est} numberOfLines={1}>{item.establecimientos.nombre_establecimiento}</Text>
                 )}
+                {!item.activo && <Text style={styles.inactivoTag}>Desactivado</Text>}
               </View>
               <View style={[styles.rolBadge, { backgroundColor: `${color}18` }]}>
                 <Text style={[styles.rolText, { color }]}>
-                  {LABEL_ROL[item.rol as RolUsuario] ?? item.rol}
+                  {LABEL_ROL[item.rol] ?? item.rol}
                 </Text>
               </View>
-            </View>
+              <Ionicons name="chevron-forward" size={16} color="#D1D5DB" style={{ marginLeft: 4 }} />
+            </TouchableOpacity>
           );
         }}
       />
+
+      {/* Modal de gestión */}
+      <Modal visible={!!seleccionado} animationType="slide" transparent onRequestClose={cerrarGestion}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Gestionar usuario</Text>
+              <TouchableOpacity onPress={cerrarGestion}>
+                <Ionicons name="close" size={24} color="#553b5e" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.fieldLabel}>Nombre completo</Text>
+            <TextInput
+              style={styles.input}
+              value={nombreEdit}
+              onChangeText={setNombreEdit}
+              autoCapitalize="words"
+            />
+
+            <Text style={styles.fieldLabel}>Rol</Text>
+            <TouchableOpacity style={styles.picker} onPress={() => setShowRoles((s) => !s)}>
+              <Text style={styles.pickerValue}>{rolEdit ? LABEL_ROL[rolEdit] : ''}</Text>
+              <Ionicons name={showRoles ? 'chevron-up' : 'chevron-down'} size={18} color="#8e8e99" />
+            </TouchableOpacity>
+            {showRoles && (
+              <View style={styles.rolesDropdown}>
+                {rolesDisponibles.map((r) => (
+                  <TouchableOpacity
+                    key={r}
+                    style={styles.rolesItem}
+                    onPress={() => { setRolEdit(r); setShowRoles(false); }}
+                  >
+                    <Text style={styles.rolesItemText}>{LABEL_ROL[r]}</Text>
+                    {rolEdit === r && <Ionicons name="checkmark" size={16} color="#a281ba" />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.saveBtn, guardando && { opacity: 0.6 }]}
+              onPress={guardarCambios}
+              disabled={guardando}
+            >
+              <Text style={styles.saveBtnText}>Guardar cambios</Text>
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+
+            <View style={styles.estadoRow}>
+              <Text style={styles.estadoLabel}>
+                {seleccionado?.activo ? 'Cuenta activa' : 'Cuenta desactivada'}
+              </Text>
+              <Switch
+                value={!!seleccionado?.activo}
+                onValueChange={alternarActivo}
+                disabled={guardando}
+                trackColor={{ false: '#E5E7EB', true: '#a281ba' }}
+              />
+            </View>
+            <Text style={styles.hint}>
+              Desactivar bloquea el acceso a la app sin borrar su historial. Reversible.
+            </Text>
+
+            <TouchableOpacity style={styles.deleteBtn} onPress={confirmarEliminar} disabled={guardando}>
+              <Ionicons name="trash-outline" size={18} color="#EF4444" />
+              <Text style={styles.deleteBtnText}>Eliminar usuario definitivamente</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -159,13 +309,58 @@ const styles = StyleSheet.create({
     backgroundColor: 'white', borderRadius: 14, padding: 14,
     marginBottom: 8, borderWidth: 1, borderColor: '#E5E7EB',
   },
+  cardInactivo: { opacity: 0.6 },
   avatar: {
     width: 42, height: 42, borderRadius: 21, justifyContent: 'center', alignItems: 'center',
   },
   nombre: { fontSize: 14, fontWeight: '700', color: '#553b5e' },
   email: { fontSize: 12, color: '#8e8e99', marginTop: 2 },
   est: { fontSize: 11, color: '#8e8e99', marginTop: 1 },
+  inactivoTag: { fontSize: 11, color: '#EF4444', fontWeight: '700', marginTop: 2 },
   rolBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
   rolText: { fontSize: 11, fontWeight: '700' },
   emptyTitle: { fontSize: 15, color: '#8e8e99', marginTop: 12, textAlign: 'center' },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  modalContent: {
+    backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 20, maxHeight: '85%',
+  },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#553b5e' },
+  fieldLabel: { fontSize: 12, fontWeight: '700', color: '#8e8e99', marginBottom: 6, marginTop: 12, textTransform: 'uppercase', letterSpacing: 0.4 },
+  input: {
+    backgroundColor: '#F8F9FA', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB',
+    paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#553b5e',
+  },
+  picker: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#F8F9FA', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB',
+    paddingHorizontal: 14, paddingVertical: 12,
+  },
+  pickerValue: { fontSize: 15, color: '#553b5e', fontWeight: '600' },
+  rolesDropdown: {
+    backgroundColor: 'white', borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB',
+    marginTop: 6, overflow: 'hidden',
+  },
+  rolesItem: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
+  },
+  rolesItemText: { fontSize: 14, color: '#553b5e' },
+  saveBtn: {
+    backgroundColor: '#a281ba', borderRadius: 14, paddingVertical: 14,
+    alignItems: 'center', marginTop: 20,
+  },
+  saveBtnText: { color: 'white', fontWeight: '700', fontSize: 15 },
+  divider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 20 },
+  estadoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  estadoLabel: { fontSize: 14, fontWeight: '700', color: '#553b5e' },
+  hint: { fontSize: 12, color: '#8e8e99', marginTop: 6 },
+  deleteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 24, paddingVertical: 14, borderRadius: 14,
+    borderWidth: 1, borderColor: '#FEE2E2',
+  },
+  deleteBtnText: { color: '#EF4444', fontWeight: '700', fontSize: 14 },
 });

@@ -6,6 +6,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { supabase, createTempClient } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
+import { usuariosService } from '../../services/usuarios.service';
+import { establecimientosService } from '../../services/establecimientos.service';
 import { RolUsuario, LABEL_ROL, ROLES_SALUD } from '../../types';
 
 const ROLES_PARA_ADMIN_EST: RolUsuario[] = [...ROLES_SALUD, 'Tutor_PersonaNormal'];
@@ -42,22 +45,15 @@ export const CreateUserScreen = () => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
-      const { data: perfil } = await supabase
-        .from('usuarios')
-        .select('rol, id_establecimiento')
-        .eq('id_usuario', session.user.id)
-        .single();
+      const perfil = await usuariosService.obtenerPerfil();
       if (perfil) {
         setMiRol(perfil.rol);
         setMiEstId(perfil.id_establecimiento);
         if (perfil.id_establecimiento) setEstSeleccionado(perfil.id_establecimiento);
       }
       if (perfil?.rol === 'SuperAdmin') {
-        const { data: ests } = await supabase
-          .from('establecimientos')
-          .select('id_establecimiento, nombre_establecimiento, ciudad_municipio')
-          .order('nombre_establecimiento');
-        setEstablecimientos(ests ?? []);
+        const ests = await establecimientosService.listar();
+        setEstablecimientos([...ests].sort((a, b) => a.nombre_establecimiento.localeCompare(b.nombre_establecimiento)));
       }
     };
     init();
@@ -98,33 +94,25 @@ export const CreateUserScreen = () => {
       if (authErr) throw authErr;
       if (!authData.user) throw new Error('No se pudo crear el usuario en el sistema de autenticación.');
 
-      // 2. Insertar en tabla usuarios
-      const { error: dbErr } = await supabase.from('usuarios').insert([{
+      // 2. Insertar en tabla usuarios vía usuarios-service
+      await usuariosService.crearUsuarioStaff({
         id_usuario: authData.user.id,
         nombre_completo: nombre.trim(),
         correo_electronico: correo.trim().toLowerCase(),
         rol: rolSeleccionado,
         id_establecimiento: necesitaEst ? estSeleccionado : null,
-        password_hash: '',
-        tiene_hijos: esTutor,
-      }]);
-      if (dbErr) throw dbErr;
+      });
 
-      // 3. Si es Tutor, crear también su carnet en pacientes
+      // 3. Si es Tutor, crear también su carnet en pacientes (vía pacientes-vacunacion-service,
+      // ya que el admin registra el paciente para otro tutor)
       if (esTutor) {
-        const token = typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `biosafe-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-        const { error: pacErr } = await supabase.from('pacientes').insert([{
+        await pacientesVacunacionService.registrarPaciente({
           id_tutor_registro: authData.user.id,
           nombre_completo: nombre.trim(),
           fecha_nacimiento: fechaNacimiento.trim(),
           sexo,
           es_embarazada: sexo === 'F' ? esEmbarazada : false,
-          codigo_qr_token: token,
-        }]);
-        if (pacErr) throw pacErr;
+        });
       }
 
       Alert.alert(

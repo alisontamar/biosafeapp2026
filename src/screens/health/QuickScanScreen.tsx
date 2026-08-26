@@ -1,11 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
+import { ServiceError } from '../../services/_client';
 
 const PRIMARY = '#a281ba';
 
@@ -24,13 +25,6 @@ export const QuickScanScreen = () => {
   const [errorMsg, setErrorMsg] = useState('');
   const [dosisHoy, setDosisHoy] = useState(0);
   const cooldown = useRef(false);
-  const sessionRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      sessionRef.current = session?.user.id ?? null;
-    });
-  }, []);
 
   const resetScanner = () => {
     cooldown.current = false;
@@ -60,33 +54,30 @@ export const QuickScanScreen = () => {
       }
 
       // Verificar paciente
-      const { data: paciente, error: pacErr } = await supabase
-        .from('pacientes')
-        .select('id_paciente, nombre_completo, codigo_qr_token')
-        .eq('id_paciente', payload.id_paciente)
-        .eq('codigo_qr_token', payload.token)
-        .single();
-
-      if (pacErr || !paciente) {
+      let paciente: { id_paciente: string; nombre_completo: string };
+      try {
+        paciente = await pacientesVacunacionService.obtenerPacientePorQR({
+          id_paciente: payload.id_paciente,
+          token: payload.token,
+        });
+      } catch {
         setErrorMsg('Paciente no encontrado. Verifica el QR.');
         setState('error');
         return;
       }
 
       // Registrar dosis directamente
-      const { error: dErr } = await supabase.from('dosis_aplicadas').insert([{
-        id_paciente: paciente.id_paciente,
-        id_vacuna,
-        id_usuario_atendedor: sessionRef.current,
-        fecha_aplicacion: new Date().toISOString(),
-        origen_registro: 'Validado_En_Establecimiento',
-      }]);
-
-      if (dErr) {
-        if (dErr.code === '23505') {
+      try {
+        await pacientesVacunacionService.registrarDosis({
+          id_paciente: paciente.id_paciente,
+          id_vacuna,
+          fecha_aplicacion: new Date().toISOString(),
+        });
+      } catch (dErr) {
+        if (dErr instanceof ServiceError && dErr.code === 'duplicate_dose') {
           setErrorMsg(`${paciente.nombre_completo} ya tiene esta dosis registrada.`);
         } else {
-          setErrorMsg(dErr.message ?? 'Error al registrar la dosis.');
+          setErrorMsg(dErr instanceof Error ? dErr.message : 'Error al registrar la dosis.');
         }
         setState('error');
         return;

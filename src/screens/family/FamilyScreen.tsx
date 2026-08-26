@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { colors } from '../../theme/colors';
 import { Card } from '../../components/Card';
 import { supabase } from '../../lib/supabase';
+import { pacientesVacunacionService } from '../../services/pacientesVacunacion.service';
 
 export const FamilyScreen = () => {
   const router = useRouter();
@@ -16,11 +17,7 @@ export const FamilyScreen = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.replace('/login'); return; }
 
-      const { data: pacientes } = await supabase
-        .from('pacientes')
-        .select('*')
-        .eq('id_tutor_registro', session.user.id)
-        .order('fecha_registro', { ascending: true });
+      const pacientes = await pacientesVacunacionService.listarHijosDeTutor();
 
       setHijos(pacientes || []);
     } catch (error) {

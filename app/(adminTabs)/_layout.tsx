@@ -30,6 +30,7 @@ export default function AdminTabsLayout() {
       <Tabs.Screen name="perfil"               options={{ title: 'Perfil' }} />
       <Tabs.Screen name="create-user"          options={{ href: null }} />
       <Tabs.Screen name="create-establishment" options={{ href: null }} />
+      <Tabs.Screen name="catalogo-vacunas"     options={{ href: null }} />
       <Tabs.Screen name="scanner"              options={{ href: null }} />
       <Tabs.Screen name="patient-detail"       options={{ href: null }} />
       <Tabs.Screen name="register-dose"        options={{ href: null }} />

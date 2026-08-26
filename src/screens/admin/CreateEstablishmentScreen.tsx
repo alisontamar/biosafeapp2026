@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { supabase } from '../../lib/supabase';
+import { establecimientosService } from '../../services/establecimientos.service';
 
 type TipoEst = 'Centro de Salud' | 'Farmacia';
 
@@ -23,17 +23,16 @@ export const CreateEstablishmentScreen = () => {
     }
     setSaving(true);
     try {
-      const { error } = await supabase.from('establecimientos').insert([{
+      await establecimientosService.crear({
         nombre_establecimiento: nombre.trim(),
         ciudad_municipio: ciudad.trim(),
         tipo,
-      }]);
-      if (error) throw error;
+      });
       Alert.alert('Establecimiento creado', `"${nombre.trim()}" fue registrado correctamente.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
-    } catch (e: any) {
-      Alert.alert('Error', e.message ?? 'No se pudo crear el establecimiento.');
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo crear el establecimiento.');
     } finally {
       setSaving(false);
     }

@@ -8,11 +8,8 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { supabase } from '../lib/supabase';
-
-const GROQ_KEY = process.env.EXPO_PUBLIC_GROQ_API_KEY ?? '';
-const SUPA_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
-const SUPA_KEY = process.env.EXPO_PUBLIC_SUPABASE_KEY ?? '';
+import { pacientesVacunacionService } from '../services/pacientesVacunacion.service';
+import { carnetOcrService } from '../services/carnetOcr.service';
 
 type Fase = 'fuente' | 'procesando' | 'revision' | 'guardando';
 
@@ -54,10 +51,7 @@ export const CarnetUploadModal = ({
   }, [visible]);
 
   const cargarCatalogo = async () => {
-    const { data } = await supabase
-      .from('cat_vacunas_oficiales')
-      .select('id_vacuna, nombre_enfermedad, dosis_numero')
-      .order('nombre_enfermedad');
+    const data = await pacientesVacunacionService.listarCatalogoVacunas();
     setCatalogo(data ?? []);
   };
 
@@ -117,34 +111,10 @@ export const CarnetUploadModal = ({
     setFase('procesando');
     setErrorMsg(null);
     try {
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${GROQ_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-          response_format: { type: 'json_object' },
-          max_tokens: 1000,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } },
-              {
-                type: 'text',
-                text: 'Eres un lector de carnets de vacunación bolivianos. Extrae TODAS las vacunas aplicadas visibles. Responde SOLO con JSON: {"dosis":[{"vacuna":"nombre en español","fecha":"DD/MM/YYYY","lote":"numero o null"}]}. Si un campo no es legible usa null.',
-              },
-            ],
-          }],
-        }),
-      });
-      if (!res.ok) throw new Error(`Error Groq: ${res.status}`);
-      const data = await res.json();
-      const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? '{}');
-      procesarExtraccion(parsed.dosis ?? []);
-    } catch (e: any) {
-      setErrorMsg(e.message ?? 'No se pudo analizar la imagen.');
+      const { dosis } = await carnetOcrService.analizarImagen({ base64 });
+      procesarExtraccion(dosis);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'No se pudo analizar la imagen.');
       setFase('fuente');
     }
   };
@@ -153,24 +123,15 @@ export const CarnetUploadModal = ({
     setFase('procesando');
     setErrorMsg(null);
     try {
-      const res = await fetch(`${SUPA_URL}/functions/v1/extract-carnet`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${SUPA_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ base64, type: 'pdf' }),
-      });
-      if (!res.ok) throw new Error(`Error ${res.status}`);
-      const data = await res.json();
-      if (data.error === 'no_text') {
+      const { dosis, sinTexto } = await carnetOcrService.analizarPDF({ base64 });
+      if (sinTexto) {
         setErrorMsg('El PDF no tiene texto legible (puede ser escaneado). Intentá tomar una foto del carnet.');
         setFase('fuente');
         return;
       }
-      procesarExtraccion(data.dosis ?? []);
-    } catch (e: any) {
-      setErrorMsg(e.message ?? 'No se pudo procesar el PDF. Intentá con una foto.');
+      procesarExtraccion(dosis);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'No se pudo procesar el PDF. Intentá con una foto.');
       setFase('fuente');
     }
   };
@@ -235,30 +196,15 @@ export const CarnetUploadModal = ({
     }
     setFase('guardando');
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      // Deduplicar: si el usuario seleccionó la misma vacuna dos veces, tomar la primera
-      const seen = new Set<string>();
-      const rows = validas
-        .filter((d) => { const ok = !seen.has(d.id_vacuna!); seen.add(d.id_vacuna!); return ok; })
-        .map((d) => ({
-          id_paciente: idPaciente,
-          id_vacuna: d.id_vacuna,
-          fecha_aplicacion: d.fecha,
-          lote: d.lote || null,
-          origen_registro: 'Migrado_Cartilla_Fisica',
-          id_usuario_atendedor: session?.user?.id ?? null,
-        }));
-
-      const { error } = await supabase.from('dosis_aplicadas').upsert(rows, {
-        onConflict: 'id_paciente,id_vacuna',
-        ignoreDuplicates: true,
+      const { guardadas } = await pacientesVacunacionService.importarDosisDesdeCartilla({
+        id_paciente: idPaciente,
+        dosis: validas.map((d) => ({ id_vacuna: d.id_vacuna!, fecha: d.fecha, lote: d.lote || null })),
       });
-      if (error) throw error;
 
       onUploadComplete?.();
-      Alert.alert('¡Listo!', `Se guardaron ${rows.length} dosis del carnet.`, [{ text: 'OK', onPress: onClose }]);
-    } catch (e: any) {
-      Alert.alert('Error al guardar', e.message ?? 'Intentá nuevamente.');
+      Alert.alert('¡Listo!', `Se guardaron ${guardadas} dosis del carnet.`, [{ text: 'OK', onPress: onClose }]);
+    } catch (e) {
+      Alert.alert('Error al guardar', e instanceof Error ? e.message : 'Intentá nuevamente.');
       setFase('revision');
     }
   };

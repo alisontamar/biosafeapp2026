@@ -5,6 +5,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
+import { usuariosService } from '../../services/usuarios.service';
+import { establecimientosService } from '../../services/establecimientos.service';
 import { LABEL_ROL, RolUsuario } from '../../types';
 
 export const HealthProfileScreen = () => {
@@ -17,19 +19,11 @@ export const HealthProfileScreen = () => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
-      const { data: perfil } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('id_usuario', session.user.id)
-        .single();
+      const perfil = await usuariosService.obtenerPerfil();
       if (perfil) {
         setUserData(perfil);
         if (perfil.id_establecimiento) {
-          const { data: est } = await supabase
-            .from('establecimientos')
-            .select('*')
-            .eq('id_establecimiento', perfil.id_establecimiento)
-            .single();
+          const est = await establecimientosService.obtenerPorId({ id_establecimiento: perfil.id_establecimiento });
           if (est) setEstablecimiento(est);
         }
       }
